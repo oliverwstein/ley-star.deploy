@@ -15,7 +15,7 @@ jobs:
 
       - name: Clone frontend repo
         run: |
-          git clone --branch minimal-splash-page https://github.com/oliverwstein/ley-star.frontend frontend/src
+          git clone --branch gcloud https://github.com/oliverwstein/ley-star.frontend frontend/src
 
       - name: Google Auth
         id: auth

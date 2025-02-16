@@ -1,4 +1,6 @@
-# Leystar Deployment
+# Leystar 
+
+## Deployment
 
 This repository contains deployment configurations for the Leystar manuscript project.
 

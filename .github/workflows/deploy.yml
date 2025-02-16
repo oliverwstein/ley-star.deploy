@@ -13,9 +13,18 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Clone frontend repo
+      - name: Clone minimal frontend repo
         run: |
-          git clone --branch gcloud https://github.com/oliverwstein/ley-star.frontend frontend/src
+          git clone https://github.com/oliverwstein/minimal-sveltekit-test.git frontend/src  # Correct URL
+
+      - name: List Files (Debugging)
+        run: |
+          echo "Files in /workspace:"
+          ls -l /workspace
+          echo "Files in /workspace/frontend:"
+          ls -l /workspace/frontend
+          echo "Files in /workspace/frontend/src:"
+          ls -l /workspace/frontend/src
 
       - name: Google Auth
         id: auth

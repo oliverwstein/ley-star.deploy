@@ -27,26 +27,25 @@ jobs:
         uses: google-github-actions/setup-gcloud@v1
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
-    #   - name: Deploy to Cloud Run
-    #     run: |
-    #         gcloud builds submit frontend --config=frontend/cloudbuild_debug.yaml --async
       - name: Deploy to Cloud Run
         run: |
-          gcloud builds submit frontend --config=frontend/cloudbuild.yaml --async
-          BUILD_ID=$(gcloud builds list --limit=1 --format='value(id)')
-          while true; do
-            sleep 30
-            BUILD_STATUS=$(gcloud builds describe "$BUILD_ID" --format='value(status)')
-            echo "Build Status: $BUILD_STATUS"
-            case "$BUILD_STATUS" in
-              SUCCESS)
-                echo "Build succeeded!"
-                exit 0
-                ;;
-              FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED)
-                echo "Build failed with status: $BUILD_STATUS"
-                gcloud builds log "$BUILD_ID"  # Show the build logs
-                exit 1
-                ;;
-            esac
-          done
+            gcloud builds submit frontend --config=frontend/cloudbuild.yaml --async
+            # Get the build ID of the *last* build.
+            BUILD_ID=$(gcloud builds list --limit=1 --format='value(id)')
+            # Wait for build to complete, checking status every 30s
+            while true; do
+                sleep 30
+                BUILD_STATUS=$(gcloud builds describe "$BUILD_ID" --format='value(status)')
+                echo "Build Status: $BUILD_STATUS"
+                case "$BUILD_STATUS" in
+                SUCCESS)
+                    echo "Build succeeded!"
+                    exit 0
+                    ;;
+                FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED)
+                    echo "Build failed with status: $BUILD_STATUS"
+                    gcloud builds log "$BUILD_ID"  # Show the build logs
+                    exit 1
+                    ;;
+                esac
+            done

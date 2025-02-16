@@ -15,8 +15,7 @@ jobs:
 
       - name: Clone minimal frontend repo
         run: |
-          git clone https://github.com/oliverwstein/minimal-sveltekit-test.git frontend/src  # Correct URL
-
+            git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/oliverwstein/minimal-sveltekit-test.git frontend/src
       - name: List Files (Debugging)
         run: |
           echo "Files in /workspace:"

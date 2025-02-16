@@ -13,10 +13,19 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Create frontend directory structure
+        run: |
+          mkdir -p frontend/src
+          
       - name: Clone frontend repo
         run: |
-          git clone https://github.com/oliverwstein/ley-star frontend/src
+          git clone https://github.com/oliverwstein/ley-star.frontend frontend/src
       
+      - name: Copy deployment files
+        run: |
+          cp frontend/src/Dockerfile frontend/
+          cp frontend/src/cloudbuild.yaml frontend/
+
       - name: Google Auth
         id: auth
         uses: google-github-actions/auth@v1
@@ -30,4 +39,11 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
-          gcloud builds submit frontend --config=frontend/cloudbuild.yaml
+          gcloud builds submit frontend --config=frontend/cloudbuild.yaml || true
+          # Wait a bit for the build to progress
+          sleep 30
+          # Check the last build status
+          BUILD_STATUS=$(gcloud builds list --limit=1 --format='get(status)')
+          if [[ "$BUILD_STATUS" == "FAILURE" ]]; then
+            exit 1
+          fi

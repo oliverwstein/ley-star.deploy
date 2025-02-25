@@ -127,6 +127,26 @@ app.use((err, req, res, next) => {
 });
 
 // ROUTES
+// Root route
+app.get('/', (req, res) => {
+  res.status(200).json({ 
+    message: 'Ley-Star API',
+    version: '1.0.0',
+    endpoints: [
+      '/health',
+      '/api/health',
+      '/api/manuscripts',
+      '/api/manuscripts/:id',
+      '/api/manuscripts/:id/pages',
+      '/api/manuscripts/:id/pages/:pageId',
+      '/api/manuscripts/:id/pages/:pageId/image',
+      '/api/manuscripts/:id/pages/:pageId/thumbnail',
+      '/api/manuscripts/:id/pages/:pageId/segmentation',
+      '/api/manuscripts/:id/pages/:pageId/transcript'
+    ]
+  });
+});
+
 // Health check endpoints - support both /health and /api/health
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });

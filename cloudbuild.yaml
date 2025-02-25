@@ -21,12 +21,26 @@ steps:
       - '--memory=512Mi'
       - '--cpu=1'
       - '--set-env-vars=GCS_BUCKET_NAME=${_GCS_BUCKET_NAME}'
+      
+  # Create or update domain mapping (continue on error if already exists)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        gcloud beta run domain-mappings create \
+          --service=leystar-api \
+          --domain=${_DOMAIN_NAME} \
+          --region=us-east4 \
+          --platform=managed || echo "Domain mapping already exists or requires manual verification"
+    id: 'domain-mapping'
 
 images:
   - 'gcr.io/$PROJECT_ID/leystar-api:$COMMIT_SHA'
 
 substitutions:
   _GCS_BUCKET_NAME: ley-star  # Default value, can be overridden
+  _DOMAIN_NAME: ley-star.com  # Domain name to map to the service
 
 options:
   logging: CLOUD_LOGGING_ONLY

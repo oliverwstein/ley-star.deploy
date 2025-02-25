@@ -37,36 +37,72 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 // Initialize Google Cloud Storage
-const storage = new Storage({
-  projectId: process.env.GOOGLE_CLOUD_PROJECT,
-  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
-});
-const bucketName = process.env.GCS_BUCKET_NAME;
+let storage;
+let bucketName;
+
+try {
+  console.log("Initializing Google Cloud Storage...");
+  
+  // In Cloud Run, we use default credentials
+  if (process.env.K_SERVICE) {
+    console.log("Running in Cloud Run, using default credentials");
+    storage = new Storage();
+  } else {
+    console.log("Running locally, using provided credentials");
+    storage = new Storage({
+      projectId: process.env.GOOGLE_CLOUD_PROJECT,
+      keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
+    });
+  }
+  
+  bucketName = process.env.GCS_BUCKET_NAME;
+  console.log(`Using bucket: ${bucketName}`);
+  
+} catch (error) {
+  console.error(`Failed to initialize Google Cloud Storage: ${error.message}`);
+  logger.error(`Failed to initialize Google Cloud Storage: ${error.message}`);
+}
 
 // Log bucket info for debugging
 async function checkBucket() {
   try {
+    if (!storage || !bucketName) {
+      console.error("Storage or bucket name not initialized properly");
+      return;
+    }
+    
+    console.log(`Checking if bucket ${bucketName} exists...`);
     const [exists] = await storage.bucket(bucketName).exists();
+    console.log(`Bucket ${bucketName} exists: ${exists}`);
     logger.info(`Bucket ${bucketName} exists: ${exists}`);
     
     if (exists) {
       const [files] = await storage.bucket(bucketName).getFiles({
         maxResults: 5
       });
+      console.log(`First ${files.length} files in bucket:`);
       logger.info(`First 5 files in bucket:`);
       files.forEach(file => {
+        console.log(` - ${file.name}`);
         logger.info(` - ${file.name}`);
       });
     }
   } catch (error) {
+    console.error(`Error checking bucket: ${error.message}`);
     logger.error(`Error checking bucket: ${error.message}`);
   }
 }
-checkBucket();
 
+// Don't wait for bucket check to start server
+checkBucket().catch(err => {
+  console.error("Bucket check failed but continuing:", err);
+});
+
+// Allow server to start even if bucket name is missing
 if (!bucketName) {
   logger.error('GCS_BUCKET_NAME is not set in environment variables');
-  process.exit(1);
+  console.error('GCS_BUCKET_NAME is not set in environment variables');
+  // Don't exit - process.exit(1);
 }
 
 // Middleware
@@ -358,6 +394,7 @@ app.get('/api/manuscripts/:id/pages/:pageId/transcript', async (req, res, next) 
 
 // Start the server
 app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
   logger.info(`Server running on port ${PORT}`);
 });
 

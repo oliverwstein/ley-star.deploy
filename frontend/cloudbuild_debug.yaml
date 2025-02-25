@@ -1,5 +1,0 @@
-# frontend/cloudbuild_debug.yaml
- steps:
-   - name: 'gcr.io/cloud-builders/docker'
-     args: ['version']
-     dir: 'frontend'

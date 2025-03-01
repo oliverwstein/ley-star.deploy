@@ -1,0 +1,537 @@
+<script>
+    import { onMount, onDestroy } from 'svelte';
+    
+    // Props
+    export let manuscriptId = '';
+    export let pageId = null;
+    export let segmentation = null;
+    export let highlightedLine = null;
+    export let activeSegment = null;
+    export let onSegmentHover = (id) => {};
+    export let onSegmentClick = (id) => {};
+    
+    // Basic state
+    let imageElement;
+    let containerElement;
+    let imageLoaded = false;
+    let imageError = false;
+    let imageSize = { width: 0, height: 0 }; // Initialize with zero
+    let scaleFactor = { x: 1, y: 1 };
+    let zoomLevel = 1;
+    
+    // Computed values
+    $: imageUrl = pageId ? `/api/manuscripts/${manuscriptId}/pages/${pageId}/image` : '';
+    
+    // Reset the view when the page changes
+    $: if (pageId) {
+        resetView();
+    }
+    
+    // Filter regions when segmentation changes - do this once reactively
+    $: filteredRegions = segmentation?.regions?.filter(r => 
+        r.points && 
+        Array.isArray(r.points) && 
+        r.points.length > 2
+    ) || [];
+    
+    // Recalculate scale factors when requirements are met
+    $: if (segmentation && imageLoaded && imageSize.width > 0) {
+        calculateScaleFactors();
+    }
+    
+    onMount(() => {
+        // Listen for wheel events for zooming
+        if (containerElement) {
+            containerElement.addEventListener('wheel', handleWheel, { passive: false });
+        }
+    });
+    
+    onDestroy(() => {
+        // Clean up wheel event listener
+        if (containerElement) {
+            containerElement.removeEventListener('wheel', handleWheel);
+        }
+    });
+    
+    function resetView() {
+        imageLoaded = false;
+        imageError = false;
+        zoomLevel = 1;
+        
+        // Reset image size to force proper recalculation
+        imageSize = { width: 0, height: 0 };
+    }
+    
+    // Handle image load - the critical function for scaling
+    function handleImageLoad() {
+        if (!imageElement) return;
+        
+        // Store actual image dimensions from the loaded element
+        imageSize = {
+            width: imageElement.naturalWidth,
+            height: imageElement.naturalHeight
+        };
+        
+        console.log('Image loaded with dimensions:', imageSize);
+        
+        // Update UI state
+        imageLoaded = true;
+        imageError = false;
+        
+        // Scale factors will be calculated via the reactive statement
+    }
+    
+    // Calculate scale factors based on image_dimensions in segmentation
+    function calculateScaleFactors() {
+        if (!segmentation || !imageSize.width) return;
+        
+        // Get source dimensions from image_dimensions field
+        const sourceWidth = segmentation.image_dimensions?.width;
+        const sourceHeight = segmentation.image_dimensions?.height;
+        
+        if (sourceWidth && sourceHeight && sourceWidth > 0 && sourceHeight > 0) {
+            // Calculate ratio between image dimensions and segmentation dimensions
+            const scaleX = imageSize.width / sourceWidth;
+            const scaleY = imageSize.height / sourceHeight;
+            
+            scaleFactor = { x: scaleX, y: scaleY };
+            
+            console.log(`Calculated scale factors: ${scaleX.toFixed(4)}x, ${scaleY.toFixed(4)}y`);
+            console.log(`Display dimensions: ${imageSize.width}x${imageSize.height}, Source: ${sourceWidth}x${sourceHeight}`);
+        } else {
+            console.warn('Invalid image dimensions in segmentation data. Using 1:1 scale.');
+            scaleFactor = { x: 1, y: 1 };
+        }
+    }
+    
+    // Simplified pan functionality
+    let isPanning = false;
+    let lastPosition = { x: 0, y: 0 };
+    
+    function startPan(event) {
+        // Only initiate pan with middle mouse button or when zoomed in
+        if (event.button === 1 || zoomLevel > 1) {
+            isPanning = true;
+            lastPosition = {
+                x: event.clientX,
+                y: event.clientY
+            };
+            event.preventDefault();
+        }
+    }
+    
+    function movePan(event) {
+        if (!isPanning) return;
+        
+        const dx = event.clientX - lastPosition.x;
+        const dy = event.clientY - lastPosition.y;
+        
+        if (containerElement) {
+            containerElement.scrollLeft -= dx;
+            containerElement.scrollTop -= dy;
+        }
+        
+        lastPosition = {
+            x: event.clientX,
+            y: event.clientY
+        };
+    }
+    
+    function endPan() {
+        isPanning = false;
+    }
+    
+    // Simplified zoom functionality
+    function handleWheel(event) {
+        if (event.ctrlKey || event.metaKey) {
+            // Prevent default zoom behavior
+            event.preventDefault();
+            
+            // Calculate zoom delta based on wheel direction
+            const delta = -Math.sign(event.deltaY) * 0.1;
+            const newZoom = Math.max(1, Math.min(3, zoomLevel + delta));
+            
+            if (newZoom !== zoomLevel) {
+                zoomLevel = newZoom;
+                
+                // Instead of modifying DOM directly, we'll use style bindings
+            }
+        }
+    }
+    
+    // Simplified segment interaction handlers
+    function handleSegmentMouseEnter(region) {
+        if (!region?.content) return;
+        
+        const idToHighlight = region.lineId || region.id;
+        onSegmentHover(idToHighlight);
+    }
+    
+    function handleSegmentMouseLeave() {
+        onSegmentHover(null);
+    }
+    
+    function handleSegmentClick(region, event) {
+        if (!region?.content) return;
+        if (event) event.stopPropagation();
+        
+        const idToActivate = region.lineId || region.id;
+        onSegmentClick(idToActivate);
+    }
+    
+    // Helper to get segment styling
+    function getSegmentStyle(isActive, isHighlighted) {
+        return {
+            fill: isActive ? 'rgba(128, 0, 128, 0.3)' : 
+                  isHighlighted ? 'rgba(65, 105, 225, 0.3)' : 'transparent',
+            stroke: isActive ? 'rgba(128, 0, 128, 0.8)' : 
+                    isHighlighted ? 'rgba(65, 105, 225, 0.8)' : 'rgba(65, 105, 225, 0.2)',
+            strokeWidth: (isActive || isHighlighted) ? 2 : 1
+        };
+    }
+</script>
+
+<div 
+    class="image-viewer {isPanning ? 'panning' : ''}"
+    bind:this={containerElement}
+    on:mousedown={startPan}
+    on:mousemove={movePan}
+    on:mouseup={endPan}
+    on:mouseleave={endPan}
+    tabindex="0"
+    aria-label="Manuscript page viewer"
+>
+    {#if !imageLoaded && !imageError}
+        <div class="loading-indicator">
+            <div class="spinner"></div>
+            <span>Loading image...</span>
+        </div>
+    {:else if imageError}
+        <div class="error-message">
+            <p>Failed to load image for page {pageId}</p>
+            <button 
+                class="retry-button"
+                on:click={() => {
+                    imageError = false;
+                    if (imageElement) {
+                        imageElement.src = `${imageUrl}?retry=${Date.now()}`;
+                    }
+                }}
+            >
+                Retry Load
+            </button>
+        </div>
+    {/if}
+    
+    {#if imageUrl}
+        <div class="image-container" style="transform: scale({zoomLevel})">
+            <img 
+                src={imageUrl}
+                alt={`Page ${pageId}`}
+                bind:this={imageElement}
+                class={imageLoaded ? 'loaded' : 'loading'}
+                on:load={handleImageLoad}
+                on:error={() => imageError = true}
+            />
+            
+            <!-- Only render the SVG when we have all required data and proper dimensions -->
+            {#if segmentation && imageLoaded && imageSize.width > 0 && filteredRegions.length > 0}
+                <svg 
+                    class="segmentation-overlay"
+                    viewBox={`0 0 ${imageSize.width} ${imageSize.height}`}
+                    preserveAspectRatio="xMidYMid meet"
+                >
+                    {#each filteredRegions as region (region.id)}
+                        {@const lineId = region.lineId || region.id}
+                        {@const isHighlighted = lineId === highlightedLine || region.id === highlightedLine}
+                        {@const isActive = lineId === activeSegment || region.id === activeSegment}
+                        
+                        {@const style = getSegmentStyle(isActive, isHighlighted)}
+                        
+                        <!-- Create the path data with proper scaling -->
+                        {@const pathData = region.points.map((p, i) => {
+                            const x = p.x * scaleFactor.x;
+                            const y = p.y * scaleFactor.y;
+                            return `${i === 0 ? 'M' : 'L'}${x},${y}`;
+                        }).join(' ') + ' Z'}
+                        
+                        <path
+                            d={pathData}
+                            fill={style.fill}
+                            stroke={style.stroke}
+                            stroke-width={style.strokeWidth}
+                            on:mouseenter={() => handleSegmentMouseEnter(region)}
+                            on:mouseleave={handleSegmentMouseLeave}
+                            on:click={(e) => handleSegmentClick(region, e)}
+                            class="segment-polygon"
+                            role="button"
+                            tabindex="0"
+                        />
+                        
+                        {#if (isHighlighted || isActive) && region.content}
+                            <!-- Tooltip for highlighted/active segments -->
+                            {@const centerX = region.points.reduce((sum, p) => sum + (p.x * scaleFactor.x), 0) / region.points.length}
+                            {@const centerY = region.points.reduce((sum, p) => sum + (p.y * scaleFactor.y), 0) / region.points.length}
+                            
+                            <foreignObject
+                                x={centerX - 100}
+                                y={centerY - 30}
+                                width="200"
+                                height="60"
+                                class="tooltip-container"
+                            >
+                                <div class="segment-tooltip">
+                                    <div class="tooltip-content">
+                                        {region.content}
+                                    </div>
+                                </div>
+                            </foreignObject>
+                        {/if}
+                    {/each}
+                </svg>
+            {/if}
+        </div>
+    {/if}
+    
+    <!-- Minimal zoom controls -->
+    {#if imageLoaded}
+        <div class="controls-panel">
+            <button 
+                class="control-button zoom-out"
+                on:click={() => zoomLevel = Math.max(1, zoomLevel - 0.1)}
+                disabled={zoomLevel <= 1}
+                aria-label="Zoom Out"
+            >
+                -
+            </button>
+            
+            <div class="zoom-level">
+                {Math.round(zoomLevel * 100)}%
+            </div>
+            
+            <button 
+                class="control-button zoom-in"
+                on:click={() => zoomLevel = Math.min(3, zoomLevel + 0.1)}
+                disabled={zoomLevel >= 3}
+                aria-label="Zoom In"
+            >
+                +
+            </button>
+            
+            <button 
+                class="control-button reset"
+                on:click={() => {
+                    zoomLevel = 1;
+                    if (containerElement) {
+                        containerElement.scrollLeft = 0;
+                        containerElement.scrollTop = 0;
+                    }
+                }}
+                disabled={zoomLevel === 1}
+                aria-label="Reset Zoom"
+            >
+                Reset
+            </button>
+        </div>
+    {/if}
+</div>
+
+<style>
+    .image-viewer {
+        width: 100%;
+        height: 100%;
+        position: relative;
+        overflow: auto;
+        background: #f1f5f9;
+        cursor: default;
+        outline: none;
+    }
+    
+    .image-viewer:focus {
+        outline: 2px solid #4a9eff;
+        outline-offset: -2px;
+    }
+    
+    .image-viewer.panning {
+        cursor: grabbing;
+    }
+    
+    .image-container {
+        position: relative;
+        display: inline-block;
+        min-height: 100%;
+        margin: 0 auto;
+        transform-origin: 0 0;
+        transition: transform 0.1s ease-out;
+    }
+    
+    img {
+        display: block;
+        max-width: 100%;
+        height: auto;
+        opacity: 0;
+        transition: opacity 0.3s;
+    }
+    
+    img.loaded {
+        opacity: 1;
+    }
+    
+    .segmentation-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 10;
+    }
+    
+    .segment-polygon {
+        pointer-events: auto;
+        cursor: pointer;
+        transition: fill 0.15s, stroke 0.15s, stroke-width 0.15s;
+        vector-effect: non-scaling-stroke;
+    }
+    
+    .segment-tooltip {
+        background: rgba(0, 0, 0, 0.75);
+        border-radius: 4px;
+        padding: 0.5rem;
+        color: white;
+        font-size: 0.75rem;
+        pointer-events: none;
+        text-align: center;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .tooltip-container {
+        overflow: visible;
+        pointer-events: none;
+        z-index: 20;
+    }
+    
+    .tooltip-content {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    
+    .loading-indicator {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+    }
+    
+    .spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid rgba(0, 0, 0, 0.1);
+        border-radius: 50%;
+        border-left-color: #4a9eff;
+        animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    .error-message {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: #e53e3e;
+        text-align: center;
+        padding: 1rem;
+        background: rgba(255, 255, 255, 0.8);
+        border-radius: 4px;
+    }
+    
+    .retry-button {
+        background: #4a9eff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 0.5rem 1rem;
+        margin-top: 0.5rem;
+        cursor: pointer;
+    }
+    
+    .controls-panel {
+        position: absolute;
+        bottom: 1rem;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 0.5rem;
+        background: rgba(255, 255, 255, 0.8);
+        padding: 0.5rem;
+        border-radius: 4px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        z-index: 30;
+    }
+    
+    .control-button {
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        padding: 0.25rem 0.5rem;
+        font-size: 0.875rem;
+        cursor: pointer;
+    }
+    
+    .control-button:hover:not(:disabled) {
+        background: #e2e8f0;
+    }
+    
+    .control-button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    
+    .zoom-level {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 3rem;
+        font-size: 0.875rem;
+    }
+    
+    .zoom-in, .zoom-out {
+        font-weight: bold;
+        font-size: 1rem;
+        padding: 0.25rem 0.5rem;
+        min-width: 2rem;
+    }
+    
+    @media (max-width: 768px) {
+        .controls-panel {
+            bottom: 0.5rem;
+            padding: 0.25rem;
+            gap: 0.25rem;
+        }
+        
+        .control-button {
+            padding: 0.25rem;
+            font-size: 0.75rem;
+        }
+        
+        .zoom-level {
+            min-width: 2.5rem;
+            font-size: 0.75rem;
+        }
+    }
+</style>

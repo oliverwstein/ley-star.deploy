@@ -1,0 +1,816 @@
+<script>
+    import { onMount, afterUpdate } from 'svelte';
+    import { fade } from 'svelte/transition';
+    import { push } from 'svelte-spa-router';
+    import ThumbnailSidebar from './ThumbnailSidebar.svelte';
+    import ImageViewer from './ImageViewer.svelte';
+    import TranscriptPanel from './TranscriptPanel.svelte';
+    
+    // The component will receive a manuscript ID and optional initial page ID
+    export let manuscriptId = '';
+    export let initialPageId = '';
+    
+    // State
+    let pages = [];
+    let loading = true;
+    let error = null;
+    let currentPageIndex = 0;
+    let transcript = /** @type {{ 
+        lines: Array<{ id: string, number: number, text: string }>,
+        notes: Array<{ type: string, content: string }>,
+        illustrations?: Array<{ type: string, content: string }>,
+        translation: Array<{ number: number, text: string }>
+    } | null} */ (null);
+    let segmentation = /** @type {{ regions: Array<any> } | null} */ (null);
+    let transcriptLoading = false;
+    let segmentationLoading = false;
+    let activeSegment = null;
+    let highlightedLine = null;
+    let rightPanelVisible = true;
+    
+    // Derived values
+    $: currentPageId = pages[currentPageIndex] || null;
+    $: canGoBack = currentPageIndex > 0;
+    $: canGoForward = currentPageIndex < pages.length - 1;
+    $: manuscriptTitle = manuscriptId; // Could be replaced with actual title later
+    
+    // We'll use push() for navigation instead of this reactive statement
+    // No need to update URL reactively as we'll do it in goToPage function
+    
+    // Effect to load pages when component mounts
+    onMount(async () => {
+        if (!manuscriptId) {
+            error = "Manuscript ID not provided";
+            loading = false;
+            return;
+        }
+        
+        try {
+            loading = true;
+            
+            // Fetch list of pages for this manuscript
+            const response = await fetch(`/api/manuscripts/${manuscriptId}/pages`);
+            
+            if (!response.ok) {
+                throw new Error('Failed to fetch manuscript pages');
+            }
+            
+            const data = await response.json();
+            pages = data.pages || [];
+            
+            if (pages.length === 0) {
+                error = "No pages found for this manuscript";
+            } else {
+                // If initialPageId is provided, find its index
+                if (initialPageId) {
+                    const pageIndex = pages.findIndex(page => page === initialPageId);
+                    if (pageIndex !== -1) {
+                        currentPageIndex = pageIndex;
+                    }
+                }
+                
+                // Once we have the pages and current index, load data for the current page
+                if (pages[currentPageIndex]) {
+                    loadTranscript();
+                    loadSegmentation();
+                }
+            }
+        } catch (e) {
+            console.error('Error fetching pages:', e);
+            error = e.message;
+        } finally {
+            loading = false;
+        }
+    });
+    
+    // Function to load transcript data for the current page
+    async function loadTranscript() {
+        if (!currentPageId) return Promise.resolve();
+        if (transcriptLoading) return Promise.resolve();
+        
+        transcriptLoading = true;
+        
+        try {
+            const response = await fetch(`/api/manuscripts/${manuscriptId}/pages/${currentPageId}/transcript`);
+            
+            if (!response.ok) {
+                throw new Error('Failed to fetch transcript');
+            }
+            
+            const data = await response.json();
+            console.log('Transcript data:', data);
+            
+            // If the API returns an empty object or empty array, create a default structure
+            if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
+                transcript = {
+                    lines: [
+                        { id: 'line-1', number: 1, text: 'Sample transcript line 1' },
+                        { id: 'line-2', number: 2, text: 'Sample transcript line 2' }
+                    ],
+                    notes: [],
+                    translation: []
+                };
+            } else {
+                // Create a properly structured transcript object from the data
+                transcript = {
+                    // Convert body array to lines (body contains the main transcript content)
+                    lines: Array.isArray(data.body) 
+                        ? data.body.map((line, index) => {
+                            // Use name as id for linking with segmentation
+                            const id = line.name || line.id || `line-${index}`;
+                            return {
+                                id,
+                                number: index + 1,
+                                text: line.text || 'No text available',
+                                location: line.location || null // Location can help with segmentation mapping
+                            };
+                        })
+                        : [],
+                    
+                    // Process notes from the API
+                    notes: Array.isArray(data.notes)
+                        ? data.notes.map((note, index) => ({
+                            type: note.type || 'Note',
+                            content: note.text || note.content || 'No content available'
+                        }))
+                        : [],
+                    
+                    // Process illustrations if they exist
+                    illustrations: Array.isArray(data.illustrations)
+                        ? data.illustrations.map((illus, index) => ({
+                            type: 'Illustration',
+                            content: illus.description || 'No description available'
+                        }))
+                        : [],
+                    
+                    // Translation is a string in the API, not an array
+                    translation: data.translation ? [ 
+                        { number: 1, text: data.translation } 
+                    ] : []
+                };
+                
+                // If there are illustrations, add them to notes
+                if (transcript.illustrations && transcript.illustrations.length > 0) {
+                    transcript.notes = [...transcript.notes, ...transcript.illustrations];
+                }
+                
+                // Add marginalia if it exists
+                if (Array.isArray(data.marginalia) && data.marginalia.length > 0) {
+                    const marginaliaItems = data.marginalia.map((item, index) => ({
+                        type: 'Marginalia',
+                        content: item.text || 'No text available'
+                    }));
+                    transcript.notes = [...transcript.notes, ...marginaliaItems];
+                }
+                
+                // Add transcription notes if they exist
+                if (data.transcription_notes) {
+                    transcript.notes.push({
+                        type: 'Transcription Notes',
+                        content: data.transcription_notes
+                    });
+                }
+            }
+            
+            console.log('Processed transcript:', transcript);
+            return transcript;
+        } catch (e) {
+            console.error('Error fetching transcript:', e);
+            transcript = null;
+            return null;
+        } finally {
+            transcriptLoading = false;
+        }
+    }
+    
+    // Function to load segmentation data for the current page
+    async function loadSegmentation() {
+        if (!currentPageId) return Promise.resolve(null);
+        if (segmentationLoading) return Promise.resolve(null);
+        
+        segmentationLoading = true;
+        
+        try {
+            // Request segmentation data
+            const response = await fetch(`/api/manuscripts/${manuscriptId}/pages/${currentPageId}/segmentation`);
+            
+            if (!response.ok) {
+                throw new Error(`Failed to fetch segmentation: ${response.status} ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            console.log('Segmentation data:', data);
+            
+            // Handle empty response
+            if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
+                segmentation = {regions: []};
+                return segmentation;
+            }
+            
+            // Process regions
+            const regions = processRegions(data);
+            
+            // Create a properly structured segmentation object
+            segmentation = {
+                // Add processed regions
+                regions: regions
+            };
+            
+            console.log('Processed segmentation:', segmentation);
+            return segmentation;
+        } catch (e) {
+            console.error('Error fetching segmentation:', e);
+            segmentation = null;
+            return null;
+        } finally {
+            segmentationLoading = false;
+        }
+    }
+
+    // Helper function to process regions from different data formats
+    function processRegions(data) {
+        let regions = [];
+        
+        // Determine the source of region data
+        if (Array.isArray(data.regions)) {
+            regions = data.regions;
+        } else if (Array.isArray(data.lines)) {
+            console.log('Creating regions from lines array');
+            regions = data.lines.map((line, index) => {
+                // Get the points data
+                const pointsData = line.coordinates || line.boundary || [];
+                
+                // Process points
+                const points = pointsData
+                    .map(point => {
+                        if (Array.isArray(point) && point.length >= 2) {
+                            return { x: point[0], y: point[1] };
+                        } else if (typeof point === 'object' && 'x' in point && 'y' in point) {
+                            return { x: point.x, y: point.y };
+                        }
+                        return null;
+                    })
+                    .filter(p => p !== null);
+                
+                return {
+                    id: line.id || line.name || `line-${index}`,
+                    type: 'line',
+                    points: points,
+                    location: line.location,
+                    lineId: line.id || line.name || `line-${index}`,
+                    label: line.text || `Line ${index + 1}`
+                };
+            });
+        }
+        
+        // Map regions to a consistent format and link with transcript
+        return regions
+            .map((region, index) => {
+                // Get a unique ID for the region
+                const id = region.lineId || region.id || `region-${index}`;
+                
+                // Find matching transcript line
+                const transcriptLine = transcript && transcript.lines ? 
+                    transcript.lines.find(line => line.id === id) : null;
+                
+                // Process points into consistent format
+                const processedPoints = Array.isArray(region.points) 
+                    ? region.points.map(p => {
+                        let x, y;
+                        if (typeof p === 'object' && 'x' in p && 'y' in p) {
+                            x = p.x;
+                            y = p.y;
+                        } else if (Array.isArray(p) && p.length >= 2) {
+                            x = p[0];
+                            y = p[1];
+                        } else {
+                            return { x: 0, y: 0 };
+                        }
+                        return { x, y };
+                    })
+                    : [];
+                
+                return {
+                    id,
+                    type: region.type || 'unknown',
+                    points: processedPoints,
+                    content: transcriptLine ? transcriptLine.text : (region.label || `Region ${index + 1}`),
+                    lineId: id,
+                    label: region.label || transcriptLine?.text || `Region ${index + 1}`,
+                    hasTranscript: !!transcriptLine
+                };
+            })
+            .filter(region => region.points.length > 2); // Only keep valid polygons
+    }
+    
+    // Navigation functions
+    function goToPage(index) {
+        if (index >= 0 && index < pages.length) {
+            currentPageIndex = index;
+            
+            // Reset state variables
+            transcript = null;
+            segmentation = null;
+            activeSegment = null;
+            highlightedLine = null;
+            
+            // Update URL with new page
+            const pageId = pages[index];
+            if (pageId) {
+                push(`/manuscripts/${manuscriptId}/pages/${pageId}`);
+                
+                // The reactive loading will happen based on currentPageId changes
+                // No need to call loadTranscript and loadSegmentation directly
+            }
+        }
+    }
+    
+    function goBack() {
+        if (canGoBack) {
+            goToPage(currentPageIndex - 1);
+        }
+    }
+    
+    function goForward() {
+        if (canGoForward) {
+            goToPage(currentPageIndex + 1);
+        }
+    }
+    
+    // Handle segment interactions
+    function handleSegmentHover(segmentId) {
+        // Only update if we have a valid segment ID
+        if (segmentId) {
+            // When hovering over a segment, highlight the corresponding line
+            highlightedLine = segmentId;
+            
+            // Log for debugging
+            console.log(`Hovering segment: ${segmentId}`);
+        } else {
+            highlightedLine = null;
+        }
+    }
+    
+    function handleSegmentClick(segmentId) {
+        // Only update if we have a valid segment ID
+        if (!segmentId) return;
+        
+        console.log(`Clicked segment: ${segmentId}`);
+        
+        // Toggle active segment when clicked
+        activeSegment = activeSegment === segmentId ? null : segmentId;
+        
+        // If activating a segment, also make it the highlighted line
+        if (activeSegment) {
+            highlightedLine = activeSegment;
+            
+            // Make sure transcript panel is visible when clicking a segment
+            if (!rightPanelVisible) {
+                rightPanelVisible = true;
+            }
+            
+            // Find the corresponding transcript line and log it
+            const matchingLine = transcript && transcript.lines
+                ? transcript.lines.find(line => line.id === segmentId)
+                : null;
+                
+            console.log(`Matched transcript line:`, matchingLine);
+        }
+    }
+    
+    function handleLineHover(lineId) {
+        // Only update if we have a valid line ID
+        if (lineId) {
+            // When hovering over a transcript line, highlight the corresponding segment
+            highlightedLine = lineId;
+            
+            // Log for debugging
+            console.log(`Hovering line: ${lineId}`);
+        } else {
+            highlightedLine = null;
+        }
+    }
+    
+    function handleLineClick(lineId) {
+        // Only update if we have a valid line ID
+        if (!lineId) return;
+        
+        // Toggle active segment when clicked
+        activeSegment = activeSegment === lineId ? null : lineId;
+        
+        // If activating a segment, also make it the highlighted line
+        if (activeSegment) {
+            highlightedLine = activeSegment;
+            
+            // Find the corresponding segment and log it
+            const matchingSegment = segmentation && segmentation.regions
+                ? segmentation.regions.find(region => (region.lineId === lineId || region.id === lineId))
+                : null;
+                
+            console.log(`Clicked line: ${lineId}, matched segment:`, matchingSegment);
+        }
+    }
+    
+    // Toggle right panel
+    function toggleRightPanel() {
+        rightPanelVisible = !rightPanelVisible;
+    }
+    
+    // Load initial data when page changes
+    $: if (currentPageId) {
+        // First load transcript, then segmentation to ensure proper linking
+        loadTranscript().then(() => loadSegmentation());
+    }
+    
+    // When transcript changes, update segmentation to link them
+    $: if (transcript && segmentation) {
+        console.log('Creating transcript-segmentation mapping');
+        
+        // Create a direct mapping from transcript line ID to line data for quick lookup
+        const transcriptMap = {};
+        if (transcript.lines && Array.isArray(transcript.lines)) {
+            transcript.lines.forEach(line => {
+                if (line.id) {
+                    transcriptMap[line.id] = line;
+                }
+            });
+        }
+        
+        console.log('Transcript map:', transcriptMap);
+        
+        // Update segmentation regions with transcript line content if needed
+        segmentation = {
+            ...segmentation,
+            regions: segmentation.regions.map(region => {
+                // Try to match by different ID patterns
+                const lineId = region.lineId || region.id;
+                
+                // First try direct match
+                let transcriptLine = transcriptMap[lineId];
+                
+                // If not found, try different variations (for example, if 'line-1' vs '1')
+                if (!transcriptLine) {
+                    // Try to extract number from ID
+                    const numMatch = lineId.match(/\d+(\.\d+)?/);
+                    if (numMatch) {
+                        const numId = numMatch[0];
+                        // Try to find by numeric part
+                        const possibleKeys = Object.keys(transcriptMap).filter(key => 
+                            key.includes(numId) || key === numId
+                        );
+                        
+                        if (possibleKeys.length > 0) {
+                            transcriptLine = transcriptMap[possibleKeys[0]];
+                        }
+                    }
+                }
+                
+                // Try to match by location if region has it
+                if (!transcriptLine && region.location) {
+                    const locationMatches = Object.values(transcriptMap).filter(line => 
+                        line.location === region.location
+                    );
+                    
+                    if (locationMatches.length > 0) {
+                        transcriptLine = locationMatches[0];
+                    }
+                }
+                
+                if (transcriptLine) {
+                    console.log(`Matched region ${lineId} with transcript line ${transcriptLine.id}`);
+                    return {
+                        ...region,
+                        content: transcriptLine.text,
+                        lineId: transcriptLine.id,
+                        hasTranscript: true
+                    };
+                }
+                
+                return {
+                    ...region,
+                    hasTranscript: false
+                };
+            })
+        };
+        
+        console.log('Updated segmentation:', segmentation);
+    }
+    
+    // Keyboard navigation
+    function handleKeydown(event) {
+        if (event.key === 'ArrowLeft') {
+            goBack();
+        } else if (event.key === 'ArrowRight') {
+            goForward();
+        }
+    }
+</script>
+
+<svelte:window on:keydown={handleKeydown} />
+
+<div class="page-navigator">
+    {#if loading}
+        <div class="loading-container" transition:fade>
+            <div class="spinner"></div>
+            <p>Loading manuscript pages...</p>
+        </div>
+    {:else if error}
+        <div class="error-container" transition:fade>
+            <p class="error-message">{error}</p>
+            <a href="/#/manuscripts/{manuscriptId}" class="back-link">← Back to Manuscript</a>
+        </div>
+    {:else if pages.length > 0}
+        <div class="navigator-layout {rightPanelVisible ? 'with-transcript' : 'without-transcript'}">
+            <!-- Left sidebar with thumbnails -->
+            <ThumbnailSidebar 
+                {pages} 
+                {manuscriptId} 
+                currentPageIndex={currentPageIndex}
+                onSelectPage={goToPage}
+            />
+            
+            <!-- Main content area -->
+            <div class="main-content-area">
+                <!-- Top navigation bar -->
+                <div class="top-navbar">
+                    <div class="left-controls">
+                        <a href="/#/manuscripts/{manuscriptId}" class="back-link">← Back to Manuscript</a>
+                        <h2 class="page-title">{manuscriptTitle} - Page {currentPageId}</h2>
+                    </div>
+                    
+                    <div class="navigation-controls">
+                        <button class="nav-button" on:click={goBack} disabled={!canGoBack}>
+                            Previous
+                        </button>
+                        <span class="page-indicator">Page {currentPageIndex + 1} of {pages.length}</span>
+                        <button class="nav-button" on:click={goForward} disabled={!canGoForward}>
+                            Next
+                        </button>
+                    </div>
+                    
+                    <div class="right-controls">
+                        <button class="toggle-panel-button" on:click={toggleRightPanel}>
+                            {rightPanelVisible ? 'Hide' : 'Show'} Transcript
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Content panels (image and transcript) -->
+                <div class="content-panels">
+                    <!-- Image viewer -->
+                    <div class="image-container">
+                        <ImageViewer
+                            {manuscriptId}
+                            pageId={currentPageId}
+                            {segmentation}
+                            {highlightedLine}
+                            {activeSegment}
+                            onSegmentHover={handleSegmentHover}
+                            onSegmentClick={handleSegmentClick}
+                        />
+                    </div>
+                    
+                    <!-- Right panel with transcript -->
+                    {#if rightPanelVisible}
+                        <div class="transcript-container">
+                            <TranscriptPanel
+                                {transcript}
+                                {segmentation}
+                                {transcriptLoading}
+                                {highlightedLine}
+                                {activeSegment}
+                                onLineHover={handleLineHover}
+                                onLineClick={handleLineClick}
+                            />
+                        </div>
+                    {/if}
+                </div>
+            </div>
+        </div>
+    {:else}
+        <div class="empty-container" transition:fade>
+            <p>No pages found for this manuscript.</p>
+            <a href="/#/manuscripts/{manuscriptId}" class="back-link">← Back to Manuscript</a>
+        </div>
+    {/if}
+</div>
+
+<style>
+    .page-navigator {
+        height: 100%;
+        width: 100%;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 8px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .navigator-layout {
+        display: grid;
+        grid-template-columns: minmax(150px, 200px) 1fr;
+        height: 100%;
+        width: 100%;
+        overflow: hidden; /* Prevent overall scrolling */
+    }
+    
+    /* Main content area that contains both image and transcript */
+    .main-content-area {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        border-left: 1px solid #e2e8f0;
+        overflow: hidden; /* Prevent overflow from affecting parent */
+    }
+    
+    /* Top navigation bar */
+    .top-navbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem;
+        border-bottom: 1px solid #e2e8f0;
+        background: #f8f9fa;
+        flex-shrink: 0; /* Prevent navbar from shrinking */
+    }
+    
+    /* Horizontal container for image and transcript */
+    .content-panels {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+        height: 0; /* Force to take available space */
+        min-height: 0; /* Allow container to shrink */
+    }
+    
+    /* Image container */
+    .image-container {
+        flex: 1;
+        overflow: auto;
+        position: relative;
+        min-width: 0; /* Allow container to shrink horizontally */
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        background: #f5f5f5;
+        border: 1px solid #e0e0e0;
+    }
+    
+    /* Transcript container */
+    .transcript-container {
+        width: 350px;
+        border-left: 1px solid #e2e8f0;
+        overflow: hidden;
+    }
+    
+    /* When transcript is hidden */
+    .navigator-layout.without-transcript .image-container {
+        width: 100%;
+    }
+    
+    .left-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    
+    .navigation-controls {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+    
+    .right-controls {
+        display: flex;
+        gap: 0.5rem;
+    }
+    
+    .page-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin: 0;
+    }
+    
+    .page-indicator {
+        font-size: 0.875rem;
+        color: #4a5568;
+    }
+    
+    .nav-button, .toggle-panel-button {
+        padding: 0.5rem 1rem;
+        background: #f1f5f9;
+        border: 1px solid #e2e8f0;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: background 0.2s ease;
+    }
+    
+    .nav-button:hover:not(:disabled),
+    .toggle-panel-button:hover {
+        background: #e2e8f0;
+    }
+    
+    .nav-button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    
+    .back-link {
+        color: #4a9eff;
+        text-decoration: none;
+        font-size: 0.875rem;
+    }
+    
+    .back-link:hover {
+        text-decoration: underline;
+    }
+    
+    .loading-container,
+    .error-container,
+    .empty-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        padding: 2rem;
+    }
+    
+    .spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid rgba(0, 0, 0, 0.1);
+        border-radius: 50%;
+        border-left-color: #4a9eff;
+        animation: spin 1s linear infinite;
+        margin-bottom: 1rem;
+    }
+    
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    .error-message {
+        color: #e53e3e;
+        margin-bottom: 1rem;
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 1200px) {
+        .transcript-container {
+            width: 300px;
+        }
+    }
+    
+    @media (max-width: 1024px) {
+        .navigator-layout {
+            grid-template-columns: minmax(100px, 180px) 1fr;
+        }
+        
+        /* Make transcript panel narrower */
+        .transcript-container {
+            width: 250px;
+        }
+        
+        /* Stack navbar controls for medium screens */
+        .top-navbar {
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+    }
+    
+    @media (max-width: 768px) {
+        /* Stack everything for mobile */
+        .navigator-layout {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Make thumbnails horizontal */
+        .content-panels {
+            flex-direction: column;
+        }
+        
+        /* Make transcript full width at bottom on mobile */
+        .transcript-container {
+            width: 100%;
+            height: 250px;
+            border-left: none;
+            border-top: 1px solid #e2e8f0;
+        }
+        
+        .top-navbar {
+            flex-direction: column;
+            gap: 1rem;
+            align-items: flex-start;
+        }
+        
+        .navigation-controls, .right-controls {
+            width: 100%;
+            justify-content: space-between;
+        }
+    }
+</style>

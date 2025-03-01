@@ -32,9 +32,8 @@ const logger = winston.createLogger({
   ]
 });
 
-// Initialize Express app
-const app = express();
-const PORT = process.env.PORT || 8080;
+// Create Express router instead of app
+const router = express.Router();
 
 // Initialize Google Cloud Storage
 let storage;
@@ -105,13 +104,13 @@ if (!bucketName) {
   // Don't exit - process.exit(1);
 }
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(morgan('dev'));
+// Middleware for the router
+router.use(cors());
+router.use(express.json());
+router.use(morgan('dev'));
 
 // Add latency tracking middleware
-app.use((req, res, next) => {
+router.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
     const duration = Date.now() - start;
@@ -121,43 +120,66 @@ app.use((req, res, next) => {
 });
 
 // Define a custom error handler
-app.use((err, req, res, next) => {
+router.use((err, req, res, next) => {
   logger.error(`Error: ${err.message}`);
   res.status(500).json({ error: 'Internal Server Error', message: err.message });
 });
 
 // ROUTES
-// Root route
-app.get('/', (req, res) => {
+// Root route for API
+router.get('/', (req, res) => {
   res.status(200).json({ 
     message: 'Ley-Star API',
     version: '1.0.0',
     endpoints: [
       '/health',
-      '/api/health',
-      '/api/manuscripts',
-      '/api/manuscripts/:id',
-      '/api/manuscripts/:id/pages',
-      '/api/manuscripts/:id/pages/:pageId',
-      '/api/manuscripts/:id/pages/:pageId/image',
-      '/api/manuscripts/:id/pages/:pageId/thumbnail',
-      '/api/manuscripts/:id/pages/:pageId/segmentation',
-      '/api/manuscripts/:id/pages/:pageId/transcript'
+      '/manuscripts',
+      '/manuscripts/:id',
+      '/manuscripts/:id/pages',
+      '/manuscripts/:id/pages/:pageId',
+      '/manuscripts/:id/pages/:pageId/image',
+      '/manuscripts/:id/pages/:pageId/thumbnail',
+      '/manuscripts/:id/pages/:pageId/segmentation',
+      '/manuscripts/:id/pages/:pageId/transcript'
     ]
   });
 });
 
-// Health check endpoints - support both /health and /api/health
-app.get('/health', (req, res) => {
+// Health check endpoint
+router.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'ok' });
+// Bucket check endpoint for frontend
+router.get('/bucket', async (req, res, next) => {
+  try {
+    if (!storage || !bucketName) {
+      return res.status(500).json({ 
+        status: 'error', 
+        message: 'Storage or bucket name not properly initialized' 
+      });
+    }
+    
+    const [exists] = await storage.bucket(bucketName).exists();
+    if (!exists) {
+      return res.status(404).json({ 
+        status: 'error', 
+        message: `Bucket ${bucketName} not found` 
+      });
+    }
+    
+    res.status(200).json({ 
+      status: 'ok', 
+      bucket: bucketName 
+    });
+  } catch (error) {
+    logger.error(`Bucket check error: ${error.message}`);
+    next(error);
+  }
 });
 
 // List all manuscripts
-app.get('/api/manuscripts', async (req, res, next) => {
+router.get('/manuscripts', async (req, res, next) => {
   try {
     logger.info(`Attempting to list files from bucket: ${bucketName}`);
     
@@ -193,8 +215,61 @@ app.get('/api/manuscripts', async (req, res, next) => {
   }
 });
 
+// Get manuscript thumbnail (first page thumbnail)
+router.get('/manuscripts/:id/thumbnail', async (req, res, next) => {
+  const manuscriptId = req.params.id;
+  
+  try {
+    logger.info(`Getting thumbnail for manuscript: ${manuscriptId}`);
+    
+    // Get all files in the pages directory for this manuscript
+    const [files] = await storage.bucket(bucketName).getFiles({
+      prefix: `catalogue/${manuscriptId}/pages/`
+    });
+    
+    if (files.length === 0) {
+      return res.status(404).json({ error: 'No pages found for this manuscript' });
+    }
+    
+    // Extract page numbers from file paths
+    const pageNums = new Set();
+    files.forEach(file => {
+      const match = file.name.match(/catalogue\/[^\/]+\/pages\/(\d{4})/);
+      if (match && match[1]) {
+        pageNums.add(parseInt(match[1], 10));
+      }
+    });
+    
+    if (pageNums.size === 0) {
+      return res.status(404).json({ error: 'No valid pages found for this manuscript' });
+    }
+    
+    // Get the lowest page number (first page)
+    const firstPageNum = Math.min(...pageNums);
+    const normalizedPageId = String(firstPageNum).padStart(4, '0');
+    
+    // Get the thumbnail for the first page
+    const imagePath = `catalogue/${manuscriptId}/pages/${normalizedPageId}/thumbnail.webp`;
+    const file = storage.bucket(bucketName).file(imagePath);
+    
+    const [exists] = await file.exists();
+    if (!exists) {
+      return res.status(404).json({ error: 'Thumbnail not found' });
+    }
+    
+    res.set('Content-Type', 'image/webp');
+    res.set('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+    file.createReadStream()
+      .on('error', (err) => next(err))
+      .pipe(res);
+  } catch (error) {
+    logger.error(`Error retrieving manuscript thumbnail: ${error.message}`);
+    next(error);
+  }
+});
+
 // Get manuscript metadata
-app.get('/api/manuscripts/:id', async (req, res, next) => {
+router.get('/manuscripts/:id', async (req, res, next) => {
   const manuscriptId = req.params.id;
   
   try {
@@ -216,7 +291,7 @@ app.get('/api/manuscripts/:id', async (req, res, next) => {
 });
 
 // List all pages for a manuscript
-app.get('/api/manuscripts/:id/pages', async (req, res, next) => {
+router.get('/manuscripts/:id/pages', async (req, res, next) => {
   const manuscriptId = req.params.id;
   
   try {
@@ -270,7 +345,7 @@ function normalizePageId(pageId) {
 }
 
 // Get page data
-app.get('/api/manuscripts/:id/pages/:pageId', async (req, res, next) => {
+router.get('/manuscripts/:id/pages/:pageId', async (req, res, next) => {
   const { id: manuscriptId, pageId: rawPageId } = req.params;
   
   try {
@@ -305,14 +380,14 @@ app.get('/api/manuscripts/:id/pages/:pageId', async (req, res, next) => {
 });
 
 // Get page image (web size)
-app.get('/api/manuscripts/:id/pages/:pageId/image', async (req, res, next) => {
+router.get('/manuscripts/:id/pages/:pageId/image', async (req, res, next) => {
   const { id: manuscriptId, pageId: rawPageId } = req.params;
   
   try {
     // Normalize the page ID
     const normalizedPageId = normalizePageId(rawPageId);
     
-    const imagePath = `catalogue/${manuscriptId}/pages/${normalizedPageId}/web.webp`;
+    const imagePath = `catalogue/${manuscriptId}/pages/${normalizedPageId}/full.webp`;
     const file = storage.bucket(bucketName).file(imagePath);
     
     const [exists] = await file.exists();
@@ -332,7 +407,7 @@ app.get('/api/manuscripts/:id/pages/:pageId/image', async (req, res, next) => {
 });
 
 // Get page thumbnail
-app.get('/api/manuscripts/:id/pages/:pageId/thumbnail', async (req, res, next) => {
+router.get('/manuscripts/:id/pages/:pageId/thumbnail', async (req, res, next) => {
   const { id: manuscriptId, pageId: rawPageId } = req.params;
   
   try {
@@ -359,34 +434,53 @@ app.get('/api/manuscripts/:id/pages/:pageId/thumbnail', async (req, res, next) =
 });
 
 // Get segmentation data
-app.get('/api/manuscripts/:id/pages/:pageId/segmentation', async (req, res, next) => {
-  const { id: manuscriptId, pageId: rawPageId } = req.params;
-  
-  try {
-    // Normalize the page ID
-    const normalizedPageId = normalizePageId(rawPageId);
+router.get('/manuscripts/:id/pages/:pageId/segmentation', async (req, res, next) => {
+    const { id: manuscriptId, pageId: rawPageId } = req.params;
     
-    const filePath = `catalogue/${manuscriptId}/pages/${normalizedPageId}/segmentation.json`;
-    const file = storage.bucket(bucketName).file(filePath);
-    
-    const [exists] = await file.exists();
-    if (!exists) {
-      return res.status(404).json({ error: 'Segmentation data not found' });
+    try {
+      // Normalize the page ID
+      const normalizedPageId = normalizePageId(rawPageId);
+      const filePath = `catalogue/${manuscriptId}/pages/${normalizedPageId}/segmentation.json`;
+      const file = storage.bucket(bucketName).file(filePath);
+      
+      // Check if segmentation data exists
+      const [exists] = await file.exists();
+      if (!exists) {
+        return res.status(404).json({ error: 'Segmentation data not found' });
+      }
+      
+      // Get the segmentation data
+      const [content] = await file.download();
+      let segmentationData = JSON.parse(content.toString());
+      
+      // Calculate bounding boxes for line segments (optional)
+      if (segmentationData.lines) {
+        segmentationData.lines = segmentationData.lines.map(line => {
+          if (line.boundary && line.boundary.length > 2) {
+            // Pre-calculate useful properties for the client
+            const xs = line.boundary.map(point => point[0]);
+            const ys = line.boundary.map(point => point[1]);
+            
+            line.bounds = {
+              centerX: xs.reduce((sum, x) => sum + x, 0) / xs.length,
+              centerY: ys.reduce((sum, y) => sum + y, 0) / ys.length
+            };
+          }
+          return line;
+        });
+      }
+      
+      // Send response
+      res.set('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+      res.json(segmentationData);
+    } catch (error) {
+      logger.error(`Error retrieving segmentation data: ${error.message}`);
+      next(error);
     }
-    
-    const [content] = await file.download();
-    const segmentationData = JSON.parse(content.toString());
-    
-    res.set('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
-    res.json(segmentationData);
-  } catch (error) {
-    logger.error(`Error retrieving segmentation data: ${error.message}`);
-    next(error);
-  }
-});
+  });
 
 // Get transcript data
-app.get('/api/manuscripts/:id/pages/:pageId/transcript', async (req, res, next) => {
+router.get('/manuscripts/:id/pages/:pageId/transcript', async (req, res, next) => {
   const { id: manuscriptId, pageId: rawPageId } = req.params;
   
   try {
@@ -412,10 +506,5 @@ app.get('/api/manuscripts/:id/pages/:pageId/transcript', async (req, res, next) 
   }
 });
 
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  logger.info(`Server running on port ${PORT}`);
-});
-
-module.exports = app;
+// Export the router instead of starting the server
+module.exports = router;

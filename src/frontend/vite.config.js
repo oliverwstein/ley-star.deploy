@@ -23,5 +23,15 @@ export default defineConfig({
   // Configure SPA history fallback
   build: {
     outDir: 'dist',
+    // Make sure Vite correctly handles base path when deployed
+    emptyOutDir: true,
+    // Ensure assets are properly referenced
+    assetsDir: 'assets',
+    // Improve load time by generating fewer chunks
+    rollupOptions: {
+      output: {
+        manualChunks: undefined
+      }
+    }
   }
 })

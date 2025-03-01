@@ -19,11 +19,14 @@ app.get('/health', (req, res) => {
 
 // Serve static files from multiple locations
 app.use(express.static(path.join(__dirname, 'static')));
-app.use(express.static(path.join(__dirname, 'src/frontend/public')));
 
 // In production, serve the built frontend files
 if (process.env.NODE_ENV === 'production') {
+  console.log('Serving production frontend build...');
   app.use(express.static(path.join(__dirname, 'src/frontend/dist')));
+} else {
+  // In development, serve files from the public directory
+  app.use(express.static(path.join(__dirname, 'src/frontend/public')));
 }
 
 // For SPA client-side routing, catch all non-API routes and serve the index.html

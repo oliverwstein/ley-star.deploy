@@ -1,11 +1,11 @@
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/leystar-api:$COMMIT_SHA', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/leystar-app:$COMMIT_SHA', '.']
   
   # Push the container image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/leystar-api:$COMMIT_SHA']
+    args: ['push', 'gcr.io/$PROJECT_ID/leystar-app:$COMMIT_SHA']
   
   # Deploy container image to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -14,13 +14,13 @@ steps:
       - 'run'
       - 'deploy'
       - 'leystar-api'
-      - '--image=gcr.io/$PROJECT_ID/leystar-api:$COMMIT_SHA'
+      - '--image=gcr.io/$PROJECT_ID/leystar-app:$COMMIT_SHA'
       - '--region=us-east4'
       - '--platform=managed'
       - '--allow-unauthenticated'
-      - '--memory=512Mi'
+      - '--memory=1Gi'
       - '--cpu=1'
-      - '--set-env-vars=GCS_BUCKET_NAME=${_GCS_BUCKET_NAME}'
+      - '--set-env-vars=GCS_BUCKET_NAME=${_GCS_BUCKET_NAME},NODE_ENV=production'
       
   # Create or update domain mapping (continue on error if already exists)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -36,7 +36,7 @@ steps:
     id: 'domain-mapping'
 
 images:
-  - 'gcr.io/$PROJECT_ID/leystar-api:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/leystar-app:$COMMIT_SHA'
 
 substitutions:
   _GCS_BUCKET_NAME: ley-star  # Default value, can be overridden

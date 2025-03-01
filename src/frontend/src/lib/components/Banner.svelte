@@ -9,7 +9,7 @@
 <div class="banner-wrapper">
   <header>
     <div class="content">
-      <img src="/static/icon.png" alt="Leystar Logo" />
+      <img src="/icon.png" alt="Leystar Logo" />
       <h1>Leystar</h1>
       <slot></slot>
     </div>

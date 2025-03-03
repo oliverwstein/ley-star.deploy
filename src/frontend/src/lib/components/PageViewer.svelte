@@ -28,9 +28,15 @@
     let transcriptItemRefs = {};
     
     // Fetch manuscript metadata
-    async function fetchManuscriptInfo() {
+    async function fetchManuscriptInfo(forceRefresh = false) {
       try {
-        const response = await fetch(`/api/manuscripts/${manuscriptId}`);
+        const cacheBuster = forceRefresh ? `?nocache=${Date.now()}` : '';
+        const fetchOptions = forceRefresh ? {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' }
+        } : {};
+        
+        const response = await fetch(`/api/manuscripts/${manuscriptId}${cacheBuster}`, fetchOptions);
         if (!response.ok) {
           console.error(`Failed to fetch manuscript metadata: ${response.status} ${response.statusText}`);
           return null;
@@ -272,23 +278,115 @@
         </h2>
       </div>
       <button
-        on:click={() => {
-          // When manually refreshing, bypass browser cache by adding cache busting parameter
-          const cacheBuster = Date.now();
+        on:click={async () => {
+          isLoading = true;
+          error = null;
           
-          Promise.all([
-            fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image?nocache=${cacheBuster}`),
-            fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation?nocache=${cacheBuster}`),
-            fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript?nocache=${cacheBuster}`),
-            fetch(`/api/manuscripts/${manuscriptId}?nocache=${cacheBuster}`).then(res => res.json())
-          ]).then(([imageRes, segRes, transcriptRes, manuscriptData]) => {
-            if (imageRes.ok && segRes.ok && transcriptRes.ok) {
-              // Only refresh if all requests succeeded
-              fetchData();
-            } else {
-              console.error('Failed to refresh one or more resources');
+          try {
+            // Force bypass browser cache with cache-busting parameter
+            const cacheBuster = Date.now();
+            
+            // Fetch everything with cache busting to ensure fresh data
+            const [imageRes, segmentationRes, transcriptRes, manuscriptData] = await Promise.all([
+              fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image?nocache=${cacheBuster}`, { 
+                cache: 'no-store',
+                headers: { 'Cache-Control': 'no-cache' }
+              }),
+              fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation?nocache=${cacheBuster}`, {
+                cache: 'no-store',
+                headers: { 'Cache-Control': 'no-cache' }
+              }),
+              fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript?nocache=${cacheBuster}`, {
+                cache: 'no-store',
+                headers: { 'Cache-Control': 'no-cache' }
+              }),
+              fetchManuscriptInfo(true) // Force refresh manuscript info too
+            ]);
+            
+            // Check for errors
+            if (!imageRes.ok) throw new Error(`Failed to load image: ${imageRes.status} ${imageRes.statusText}`);
+            if (!segmentationRes.ok) throw new Error(`Failed to load segmentation: ${segmentationRes.status} ${segmentationRes.statusText}`);
+            if (!transcriptRes.ok) throw new Error(`Failed to load transcript: ${transcriptRes.status} ${transcriptRes.statusText}`);
+            
+            // Store manuscript information
+            manuscriptInfo = manuscriptData;
+            
+            // Get image as blob and create object URL
+            if (image && image.startsWith('blob:')) {
+              URL.revokeObjectURL(image); // Clean up old blob URL
             }
-          }).catch(err => console.error('Error refreshing data:', err));
+            const imageBlob = await imageRes.blob();
+            image = URL.createObjectURL(imageBlob);
+            
+            // Parse JSON responses
+            segmentation = await segmentationRes.json();
+            transcript = await transcriptRes.json();
+      
+            // Create mapping from segment IDs to transcript entries
+            transcriptMap = {};
+            
+            // Process body text
+            if (transcript.body) {
+              transcript.body.forEach(entry => {
+                if (entry.location) {
+                  transcriptMap[entry.location] = {
+                    ...entry,
+                    type: 'body'
+                  };
+                }
+              });
+            }
+            
+            // Add illustrations if they exist
+            if (transcript.illustrations) {
+              transcript.illustrations.forEach(entry => {
+                if (entry.location && !isNaN(entry.location)) {
+                  transcriptMap[entry.location] = {
+                    ...entry,
+                    text: entry.description,
+                    type: 'illustration'
+                  };
+                }
+              });
+            }
+            
+            // Add marginalia if they exist
+            if (transcript.marginalia) {
+              transcript.marginalia.forEach(entry => {
+                if (entry.location) {
+                  transcriptMap[entry.location] = {
+                    ...entry,
+                    type: 'marginalia'
+                  };
+                }
+              });
+            }
+            
+            // Create sorted array of transcript entries for display
+            sortedTranscriptEntries = Object.entries(transcriptMap)
+              .map(([id, entry]) => ({id, ...entry}))
+              .sort((a, b) => {
+                // Sort numerically by ID if possible
+                const numA = parseInt(a.id.replace(/\D/g, ''));
+                const numB = parseInt(b.id.replace(/\D/g, ''));
+                
+                if (!isNaN(numA) && !isNaN(numB)) {
+                  return numA - numB;
+                }
+                
+                // If numeric sorting fails, sort alphabetically
+                return a.id.localeCompare(b.id);
+              });
+            
+            dataReady = true;
+            
+            console.log('Data refreshed successfully!');
+          } catch (err) {
+            console.error('Error refreshing data:', err);
+            error = err.message;
+          } finally {
+            isLoading = false;
+          }
         }}
         class="refresh-button"
         title="Force reload data from server"

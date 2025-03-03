@@ -48,14 +48,11 @@
       error = null;
       
       try {
-        // Add cache-busting parameter to prevent browser caching
-        const cacheBuster = Date.now();
-        
         // Fetch image, segmentation, transcript, and manuscript info in parallel
         const [imageRes, segmentationRes, transcriptRes, manuscriptData] = await Promise.all([
-          fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image?nocache=${cacheBuster}`),
-          fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation?nocache=${cacheBuster}`),
-          fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript?nocache=${cacheBuster}`),
+          fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image`),
+          fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation`),
+          fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript`),
           fetchManuscriptInfo()
         ]);
         
@@ -276,11 +273,27 @@
       </div>
       <button
         on:click={() => {
-          fetchData();
+          // When manually refreshing, bypass browser cache by adding cache busting parameter
+          const cacheBuster = Date.now();
+          
+          Promise.all([
+            fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image?nocache=${cacheBuster}`),
+            fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation?nocache=${cacheBuster}`),
+            fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript?nocache=${cacheBuster}`),
+            fetch(`/api/manuscripts/${manuscriptId}?nocache=${cacheBuster}`).then(res => res.json())
+          ]).then(([imageRes, segRes, transcriptRes, manuscriptData]) => {
+            if (imageRes.ok && segRes.ok && transcriptRes.ok) {
+              // Only refresh if all requests succeeded
+              fetchData();
+            } else {
+              console.error('Failed to refresh one or more resources');
+            }
+          }).catch(err => console.error('Error refreshing data:', err));
         }}
         class="refresh-button"
+        title="Force reload data from server"
       >
-        Refresh Data
+        Refresh
       </button>
     </div>
   

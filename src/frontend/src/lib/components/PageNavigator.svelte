@@ -77,9 +77,10 @@
             class="page-input"
             disabled={isLoading}
         />
+        <span class="page-count">of {totalPages}</span>
     </div>
     
-    <button class="nav-button" on:click={goToNextPage} disabled={isLoading}>
+    <button class="nav-button" on:click={goToNextPage} disabled={currentPage >= totalPages || isLoading}>
         <span class="arrow">→</span>
     </button>
 </div>
@@ -123,6 +124,7 @@
     .page-input-container {
         display: flex;
         align-items: center;
+        gap: 0.5rem;
     }
 
     .page-input {
@@ -132,6 +134,9 @@
         border: 1px solid #ccc;
         border-radius: 4px;
     }
-
-    /* Remove unnecessary styles */
+    
+    .page-count {
+        font-size: 0.9rem;
+        color: #4a5568;
+    }
 </style>

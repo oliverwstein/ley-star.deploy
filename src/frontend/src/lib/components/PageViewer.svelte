@@ -19,6 +19,7 @@
     let error = null;
     let dataReady = false;
     let showTranslation = false; // Controls whether to show translation or transcription
+    let manuscriptInfo = null; // Store manuscript metadata
     
     // Element references
     let imageRef;
@@ -26,6 +27,21 @@
     let transcriptPanelRef;
     let transcriptItemRefs = {};
     
+    // Fetch manuscript metadata
+    async function fetchManuscriptInfo() {
+      try {
+        const response = await fetch(`/api/manuscripts/${manuscriptId}`);
+        if (!response.ok) {
+          console.error(`Failed to fetch manuscript metadata: ${response.status} ${response.statusText}`);
+          return null;
+        }
+        return await response.json();
+      } catch (err) {
+        console.error('Error fetching manuscript information:', err);
+        return null;
+      }
+    }
+
     // Fetch data from the server
     async function fetchData() {
       isLoading = true;
@@ -35,17 +51,21 @@
         // Add cache-busting parameter to prevent browser caching
         const cacheBuster = Date.now();
         
-        // Fetch image, segmentation, and transcript in parallel
-        const [imageRes, segmentationRes, transcriptRes] = await Promise.all([
+        // Fetch image, segmentation, transcript, and manuscript info in parallel
+        const [imageRes, segmentationRes, transcriptRes, manuscriptData] = await Promise.all([
           fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image?nocache=${cacheBuster}`),
           fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation?nocache=${cacheBuster}`),
-          fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript?nocache=${cacheBuster}`)
+          fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript?nocache=${cacheBuster}`),
+          fetchManuscriptInfo()
         ]);
         
         // Check for errors
         if (!imageRes.ok) throw new Error(`Failed to load image: ${imageRes.status} ${imageRes.statusText}`);
         if (!segmentationRes.ok) throw new Error(`Failed to load segmentation: ${segmentationRes.status} ${segmentationRes.statusText}`);
         if (!transcriptRes.ok) throw new Error(`Failed to load transcript: ${transcriptRes.status} ${transcriptRes.statusText}`);
+        
+        // Store manuscript information
+        manuscriptInfo = manuscriptData;
         
         // Get image as blob and create object URL
         const imageBlob = await imageRes.blob();
@@ -236,8 +256,24 @@
   </script>
   
   <div class="manuscript-viewer">
+    <div class="breadcrumbs">
+      <a href="/#" class="breadcrumb-link">Home</a>
+      <span class="breadcrumb-separator">›</span>
+      <a href="/#/manuscripts" class="breadcrumb-link">Manuscripts</a>
+      <span class="breadcrumb-separator">›</span>
+      <a href="/#/manuscripts/{manuscriptId}" class="breadcrumb-link">
+        {manuscriptInfo?.title || 'Manuscript Details'}
+      </a>
+      <span class="breadcrumb-separator">›</span>
+      <span class="breadcrumb-current">Page {pageId}</span>
+    </div>
+
     <div class="manuscript-viewer-header">
-      <h2 class="manuscript-viewer-title">Manuscript Page Viewer</h2>
+      <div class="manuscript-title-container">
+        <h2 class="manuscript-viewer-title">
+          {manuscriptInfo?.title || 'Manuscript'} - Page {pageId}
+        </h2>
+      </div>
       <button
         on:click={() => {
           fetchData();
@@ -446,6 +482,7 @@
       --color-background-muted: #f3f4f6;
       --color-background-alt: #e5e7eb;
       --color-border: #e5e7eb;
+      --color-link: #4a9eff;
   
       --spacing-xs: 0.25rem; /* 4px */
       --spacing-sm: 0.5rem;  /* 8px */
@@ -475,6 +512,38 @@
       margin-bottom: var(--spacing-xl); /* my-8 */
     }
   
+    /* Breadcrumbs */
+    .breadcrumbs {
+      padding: var(--spacing-md) var(--spacing-lg);
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--spacing-xs);
+      background-color: var(--color-background-light);
+      border-bottom: 1px solid var(--color-border);
+    }
+
+    .breadcrumb-link {
+      color: var(--color-link);
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+
+    .breadcrumb-link:hover {
+      text-decoration: underline;
+    }
+
+    .breadcrumb-separator {
+      color: var(--color-text-muted);
+      margin: 0 var(--spacing-xs);
+    }
+
+    .breadcrumb-current {
+      color: var(--color-text-primary);
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+
     .manuscript-viewer-header {
       /* Combines: card-header, flex, justify-between, items-center */
       padding: var(--spacing-md) var(--spacing-lg); /* p-4 p-6 combined */
@@ -484,6 +553,10 @@
       align-items: center;    /* items-center */
     }
   
+    .manuscript-title-container {
+      flex: 1;
+    }
+
     .manuscript-viewer-title {
       /* Combines: card-title */
       font-size: 1.25rem;  /* text-xl */

@@ -21,6 +21,11 @@
     let showTranslation = false; // Controls whether to show translation or transcription
     let manuscriptInfo = null; // Store manuscript metadata
     
+    // Response statuses to help with displaying appropriate messages
+    let imageRes = null;
+    let segmentationRes = null;
+    let transcriptRes = null;
+    
     // Element references
     let imageRef;
     let containerRef;
@@ -62,28 +67,49 @@
       
       try {
         // Fetch image, segmentation, transcript, and manuscript info in parallel
-        const [imageRes, segmentationRes, transcriptRes, manuscriptData] = await Promise.all([
+        const responses = await Promise.all([
           fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image`),
           fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation`),
           fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript`),
           fetchManuscriptInfo()
         ]);
         
-        // Check for errors
-        if (!imageRes.ok) throw new Error(`Failed to load image: ${imageRes.status} ${imageRes.statusText}`);
-        if (!segmentationRes.ok) throw new Error(`Failed to load segmentation: ${segmentationRes.status} ${segmentationRes.statusText}`);
-        if (!transcriptRes.ok) throw new Error(`Failed to load transcript: ${transcriptRes.status} ${transcriptRes.statusText}`);
+        // Store response objects for status checking in the UI
+        [imageRes, segmentationRes, transcriptRes] = responses;
         
-        // Store manuscript information
-        manuscriptInfo = manuscriptData;
+        // The last response is the manuscript data
+        const manuscriptData = responses[3];
+        
+        // Check for errors - only image is required, transcript and segmentation are optional
+        if (!imageRes.ok) throw new Error(`Failed to load image: ${imageRes.status} ${imageRes.statusText}`);
+        
+        // For segmentation and transcript, allow 404 errors (not found)
+        if (!segmentationRes.ok && segmentationRes.status !== 404) {
+          console.warn(`Segmentation data not available: ${segmentationRes.status} ${segmentationRes.statusText}`);
+        }
+        
+        if (!transcriptRes.ok && transcriptRes.status !== 404) {
+          console.warn(`Transcript data not available: ${transcriptRes.status} ${transcriptRes.statusText}`);
+        }
+        
+        // Store manuscript information if available
+        if (manuscriptData) {
+          manuscriptInfo = manuscriptData;
+        }
         
         // Get image as blob and create object URL
         const imageBlob = await imageRes.blob();
         image = URL.createObjectURL(imageBlob);
         
-        // Parse JSON responses
-        segmentation = await segmentationRes.json();
-        transcript = await transcriptRes.json();
+        // Parse JSON responses with fallbacks for missing data
+        segmentation = segmentationRes.ok ? await segmentationRes.json() : { lines: [] };
+        transcript = transcriptRes.ok ? await transcriptRes.json() : { 
+          body: [], 
+          illustrations: [], 
+          marginalia: [],
+          language: "Unknown",
+          transcription_notes: "This page has not yet been transcribed."
+        };
   
         // Create mapping from segment IDs to transcript entries
         transcriptMap = {};
@@ -283,6 +309,9 @@
         <h2 class="manuscript-viewer-title">
           {manuscriptInfo?.title || 'Manuscript'} - Page {pageId}
         </h2>
+        {#if transcriptRes && (!transcriptRes.ok && transcriptRes.status === 404)}
+          <div class="data-status-indicator">(Page Data Unavailable)</div>
+        {/if}
       </div>
       <button
         on:click={async () => {
@@ -309,20 +338,35 @@
             console.log('Forcing complete refresh with cache-busting...');
             
             // Fetch everything with strong cache busting to ensure fresh data
-            const [imageRes, segmentationRes, transcriptRes, manuscriptData] = await Promise.all([
+            const responses = await Promise.all([
               fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image?nocache=${cacheBuster}`, requestOptions),
               fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation?nocache=${cacheBuster}`, requestOptions),
               fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript?nocache=${cacheBuster}`, requestOptions),
               fetchManuscriptInfo(true) // Force refresh manuscript info too
             ]);
             
-            // Check for errors
-            if (!imageRes.ok) throw new Error(`Failed to load image: ${imageRes.status} ${imageRes.statusText}`);
-            if (!segmentationRes.ok) throw new Error(`Failed to load segmentation: ${segmentationRes.status} ${segmentationRes.statusText}`);
-            if (!transcriptRes.ok) throw new Error(`Failed to load transcript: ${transcriptRes.status} ${transcriptRes.statusText}`);
+            // Store response objects for status checking in the UI
+            [imageRes, segmentationRes, transcriptRes] = responses;
             
-            // Store manuscript information
-            manuscriptInfo = manuscriptData;
+            // The last response is the manuscript data
+            const manuscriptData = responses[3];
+            
+            // Check for errors - only image is required, transcript and segmentation are optional
+            if (!imageRes.ok) throw new Error(`Failed to load image: ${imageRes.status} ${imageRes.statusText}`);
+            
+            // For segmentation and transcript, allow 404 errors (not found)
+            if (!segmentationRes.ok && segmentationRes.status !== 404) {
+              console.warn(`Segmentation data not available: ${segmentationRes.status} ${segmentationRes.statusText}`);
+            }
+            
+            if (!transcriptRes.ok && transcriptRes.status !== 404) {
+              console.warn(`Transcript data not available: ${transcriptRes.status} ${transcriptRes.statusText}`);
+            }
+            
+            // Store manuscript information if available
+            if (manuscriptData) {
+              manuscriptInfo = manuscriptData;
+            }
             
             // Get image as blob and create object URL
             if (image && image.startsWith('blob:')) {
@@ -331,9 +375,15 @@
             const imageBlob = await imageRes.blob();
             image = URL.createObjectURL(imageBlob);
             
-            // Parse JSON responses
-            segmentation = await segmentationRes.json();
-            transcript = await transcriptRes.json();
+            // Parse JSON responses with fallbacks for missing data
+            segmentation = segmentationRes.ok ? await segmentationRes.json() : { lines: [] };
+            transcript = transcriptRes.ok ? await transcriptRes.json() : { 
+              body: [], 
+              illustrations: [], 
+              marginalia: [],
+              language: "Unknown",
+              transcription_notes: "This page has not yet been transcribed."
+            };
             
             console.log('Refreshed transcript data:', transcript);
       
@@ -427,7 +477,7 @@
           <!-- Manuscript image with segment overlays -->
           <div
             bind:this={containerRef}
-            class="image-container"
+            class="image-container {transcriptRes && !transcriptRes.ok ? 'full-width' : ''}"
             on:click={handleContainerClick}
             on:mousemove={handleMouseMove}
             on:mouseleave={() => hoveredSegment = null}
@@ -441,7 +491,7 @@
                 on:load={handleImageLoad}
               />
   
-              {#if segmentation && segmentation.lines && imageSize.width > 0}
+              {#if segmentation && segmentation.lines && imageSize.width > 0 && (!transcriptRes || transcriptRes.ok)}
                 {@const segBounds = segmentation.bounds || [0, 0, imageSize.width, imageSize.height]}
                 {@const segWidth = segBounds[2] - segBounds[0]}
                 {@const segHeight = segBounds[3] - segBounds[1]}
@@ -510,8 +560,9 @@
             {/if}
           </div>
   
-          <!-- Transcript and translation panel -->
-          <div class="transcript-panel">
+          <!-- Transcript and translation panel - only show if transcript data is available -->
+          {#if !transcriptRes || transcriptRes.ok}
+            <div class="transcript-panel">
             <div class="transcript-header">
               <h3 class="transcript-title">
                 {showTranslation ? 'Translation' : 'Transcription'}
@@ -553,6 +604,11 @@
                       </div>
                     {/each}
                   </div>
+                {:else if transcriptRes && (!transcriptRes.ok && transcriptRes.status === 404)}
+                  <div class="no-data-message">
+                    <p>This page has not yet been transcribed.</p>
+                    <p class="no-data-note">The manuscript image is available for viewing, but no transcription has been completed yet.</p>
+                  </div>
                 {:else}
                   <div class="no-data-message">
                     <p>No transcription data available for this page.</p>
@@ -563,6 +619,11 @@
                 {#if transcript?.translation}
                   <div class="prose">
                     {transcript.translation}
+                  </div>
+                {:else if transcriptRes && (!transcriptRes.ok && transcriptRes.status === 404)}
+                  <div class="no-data-message">
+                    <p>This page has not yet been transcribed or translated.</p>
+                    <p class="no-data-note">The manuscript image is available for viewing, but no translation has been completed yet.</p>
                   </div>
                 {:else}
                   <div class="no-data-message">
@@ -586,6 +647,7 @@
               </div>
             </div>
           </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -688,6 +750,13 @@
       font-size: 1.25rem;  /* text-xl */
       font-weight: 600;   /* font-semibold */
     }
+    
+    .data-status-indicator {
+      font-size: 0.9rem;
+      color: var(--color-text-muted);
+      margin-top: 0.25rem;
+      font-style: italic;
+    }
   
     .refresh-button {
           /* Combines:  px-3, py-1, text-sm, bg-gray-100, hover:bg-gray-200, rounded-md, transition-colors */
@@ -767,6 +836,16 @@
       flex-shrink: 0;            /* flex-shrink-0 */
       width: fit-content;
       max-width: 65%;
+      transition: max-width 0.3s ease;
+    }
+    
+    /* When transcript panel is not shown, let the image take full width */
+    .image-container.full-width {
+      max-width: 100%;
+      width: 100%;
+      margin: 0 auto;
+      display: flex;
+      justify-content: center;
     }
   
     .manuscript-image {
@@ -962,6 +1041,14 @@
       /* Combines: text-gray-500, italic */
       color: var(--color-text-muted); /* text-gray-500 */
       font-style: italic;      /* italic */
+      padding: var(--spacing-md);
+      text-align: center;
+      margin-top: var(--spacing-xl);
+    }
+    
+    .no-data-note {
+      font-size: 0.875rem;
+      margin-top: var(--spacing-sm);
     }
   
     /* --- Metadata Section --- */

@@ -25,6 +25,7 @@
     "winston": "^3.8.2"
   },
   "devDependencies": {
+    "@types/cli-progress": "^3.11.6",
     "concurrently": "^9.1.2",
     "nodemon": "^2.0.22"
   },

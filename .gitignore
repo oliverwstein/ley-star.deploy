@@ -12,7 +12,7 @@ node_modules/
 logs
 *.log
 npm-debug.log*
-
+*.txt
 # System files
 .DS_Store
 Thumbs.db

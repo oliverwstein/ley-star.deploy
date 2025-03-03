@@ -32,10 +32,17 @@
       try {
         const cacheBuster = forceRefresh ? `?nocache=${Date.now()}` : '';
         const fetchOptions = forceRefresh ? {
-          cache: 'no-store',
-          headers: { 'Cache-Control': 'no-cache' }
+          method: 'GET',
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          },
+          credentials: 'same-origin'
         } : {};
         
+        console.log(`Fetching manuscript info${forceRefresh ? ' with cache busting' : ''}`);
         const response = await fetch(`/api/manuscripts/${manuscriptId}${cacheBuster}`, fetchOptions);
         if (!response.ok) {
           console.error(`Failed to fetch manuscript metadata: ${response.status} ${response.statusText}`);
@@ -286,20 +293,26 @@
             // Force bypass browser cache with cache-busting parameter
             const cacheBuster = Date.now();
             
-            // Fetch everything with cache busting to ensure fresh data
+            // Use more extreme cache-busting techniques
+            // Disable any caching with all methods possible
+            const requestOptions = {
+              method: 'GET',
+              cache: 'no-cache', // Tell browser not to cache
+              headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+              },
+              credentials: 'same-origin' // Include cookies for auth if needed
+            };
+            
+            console.log('Forcing complete refresh with cache-busting...');
+            
+            // Fetch everything with strong cache busting to ensure fresh data
             const [imageRes, segmentationRes, transcriptRes, manuscriptData] = await Promise.all([
-              fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image?nocache=${cacheBuster}`, { 
-                cache: 'no-store',
-                headers: { 'Cache-Control': 'no-cache' }
-              }),
-              fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation?nocache=${cacheBuster}`, {
-                cache: 'no-store',
-                headers: { 'Cache-Control': 'no-cache' }
-              }),
-              fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript?nocache=${cacheBuster}`, {
-                cache: 'no-store',
-                headers: { 'Cache-Control': 'no-cache' }
-              }),
+              fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/image?nocache=${cacheBuster}`, requestOptions),
+              fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/segmentation?nocache=${cacheBuster}`, requestOptions),
+              fetch(`/api/manuscripts/${manuscriptId}/pages/${pageId}/transcript?nocache=${cacheBuster}`, requestOptions),
               fetchManuscriptInfo(true) // Force refresh manuscript info too
             ]);
             
@@ -321,6 +334,8 @@
             // Parse JSON responses
             segmentation = await segmentationRes.json();
             transcript = await transcriptRes.json();
+            
+            console.log('Refreshed transcript data:', transcript);
       
             // Create mapping from segment IDs to transcript entries
             transcriptMap = {};

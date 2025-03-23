@@ -22,9 +22,9 @@ require('dotenv').config();
 // --------------------------------
 
 // Elasticsearch connection settings
-const ES_HOST = 'http://192.168.1.17:9200';
-const ES_USERNAME = 'elastic';
-const ES_PASSWORD = 'o2Hzo=d9mmb2RnCAF_Cc';
+const ES_HOST = process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
+const ES_USERNAME = process.env.ELASTICSEARCH_USERNAME || 'elastic';
+const ES_PASSWORD = process.env.ELASTICSEARCH_PASSWORD || 'password123';
 
 // Google Cloud Storage bucket
 const GCS_BUCKET_NAME = process.env.GCS_BUCKET_NAME;

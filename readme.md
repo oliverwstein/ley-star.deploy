@@ -1,6 +1,71 @@
-# Leystar API
+# Ley-Star Manuscript Viewer
 
-A Cloud Run service that provides an API for serving manuscript data from Google Cloud Storage.
+A web application for viewing, searching, and exploring historical manuscripts stored in Google Cloud Storage with Elasticsearch-powered search capabilities.
+
+## Project Overview
+
+Ley-Star is a platform that provides access to digitized manuscripts with rich metadata. The application consists of:
+
+- **Backend API**: Node.js Express server accessing manuscript data from Google Cloud Storage
+- **Frontend**: Svelte-based SPA for browsing and viewing manuscripts
+- **Search**: Elasticsearch integration for full-text and metadata search
+- **Indexer**: Scripts for processing manuscript metadata and creating search indices
+
+## Directory Structure
+
+```
+ley-star.deploy/
+├── Dockerfile                    # Container definition for deployment
+├── cloudbuild.yaml               # Google Cloud Build configuration
+├── design.md                     # Design documentation
+├── package.json                  # Project dependencies
+├── readme.md                     # This file
+├── scripts/
+│   ├── convert_svelte_files.py   # Utility script for Svelte components
+│   ├── image-processor.ts        # Image processing utilities
+│   ├── index_manuscripts.js      # Elasticsearch indexing script
+│   └── upload-manuscript.ts      # Script for uploading new manuscripts
+├── server.js                     # Main Express server entry point
+├── src/
+│   ├── api/                      # Backend API code
+│   │   └── index.js              # API routes and handlers
+│   └── frontend/                 # Svelte frontend application
+│       ├── src/
+│       │   ├── App.svelte        # Main application component
+│       │   ├── lib/
+│       │   │   ├── components/   # Reusable UI components
+│       │   │   │   ├── Banner.svelte
+│       │   │   │   ├── Footer.svelte
+│       │   │   │   ├── ManuscriptInfoViewer.svelte
+│       │   │   │   ├── PageNavigator.svelte
+│       │   │   │   ├── PageViewer.svelte
+│       │   │   │   └── SplashBox.svelte
+│       │   │   └── stores.js     # Svelte stores for state management
+│       │   ├── routes/           # Application routes
+│       │   │   ├── +layout.svelte
+│       │   │   ├── +page.svelte
+│       │   │   ├── Home.svelte
+│       │   │   └── manuscripts/  # Manuscript-related routes
+│       │   │       ├── +page.svelte
+│       │   │       └── [id]/     # Dynamic routes by manuscript ID
+│       │   │           └── +page.svelte
+│       │   └── main.js           # Frontend entry point
+│       ├── svelte.config.js      # Svelte configuration
+│       └── vite.config.js        # Vite bundler configuration
+└── static/                       # Static assets
+    ├── background.png
+    ├── favicon.png
+    └── icon.png
+```
+
+## Core Features
+
+- Browse available manuscripts
+- View detailed manuscript information and metadata
+- Navigate manuscript pages with high-quality images
+- Search manuscripts by content, metadata, and historical context
+- View transcriptions aligned with manuscript images
+- Semantic search using vector embeddings
 
 ## API Endpoints
 
@@ -34,16 +99,71 @@ bucket-root/
           transcript.json
 ```
 
-## Local Development
+## Development Setup
 
-1. Clone this repository
-2. Install dependencies with `npm install`
-3. Create a `.env` file based on `.env.example`
-4. Run the development server with `npm run dev`
+### Prerequisites
 
-## Deployment to Cloud Run
+- Node.js v18 or later
+- Google Cloud Storage bucket with manuscript data
+- Elasticsearch (local or cloud) for search functionality
 
-### Manual Deployment
+### Environment Variables
+
+Create a `.env` file with the following variables:
+
+```
+# Google Cloud
+GCS_BUCKET_NAME=your-manuscripts-bucket
+GOOGLE_APPLICATION_CREDENTIALS=path/to/credentials.json
+GOOGLE_CLOUD_PROJECT=your-project-id
+
+# Elasticsearch
+ELASTICSEARCH_URL=http://localhost:9200
+ELASTICSEARCH_USERNAME=elastic
+ELASTICSEARCH_PASSWORD=your-password
+
+# Optional for vector embeddings
+EMBEDDING_API_URL=http://localhost:8080/embed
+```
+
+### Installation
+
+```bash
+# Install dependencies
+npm install
+
+# Install frontend dependencies
+cd src/frontend && npm install
+```
+
+### Running the Application
+
+```bash
+# Development mode with API and frontend
+npm run dev:all
+
+# API only
+npm run dev:api
+
+# Frontend only
+npm run dev:frontend
+
+# Production build
+npm run build
+npm start
+```
+
+### Indexing Manuscripts
+
+To index manuscripts into Elasticsearch:
+
+```bash
+node scripts/index_manuscripts.js
+```
+
+## Deployment
+
+### Manual Deployment to Cloud Run
 
 1. Build the Docker image:
 ```
@@ -72,7 +192,7 @@ gcloud run deploy leystar-api \
 3. Set the required substitution variables:
    - `_GCS_BUCKET_NAME`: Your Google Cloud Storage bucket name
 
-## Custom Domain Setup (ley-star.com)
+### Custom Domain Setup (ley-star.com)
 
 1. Verify domain ownership in Google Cloud Console
 2. Map the domain to your Cloud Run service:
@@ -86,7 +206,11 @@ gcloud beta run domain-mappings create \
 3. Add the provided DNS records to your domain registrar
 4. Wait for DNS propagation and SSL certificate provisioning
 
-## Service Account Permissions
+### Service Account Permissions
 
 The Cloud Run service needs the following IAM permissions:
 - `roles/storage.objectViewer` on your Google Cloud Storage bucket
+
+## License
+
+UNLICENSED - Private project, all rights reserved.

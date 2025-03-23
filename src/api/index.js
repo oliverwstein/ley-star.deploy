@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const { Storage } = require('@google-cloud/storage');
+const { Client } = require('@elastic/elasticsearch');
 const path = require('path');
 const dotenv = require('dotenv');
 const winston = require('winston');
@@ -14,6 +15,9 @@ console.log('Environment variables:');
 console.log(`GCS_BUCKET_NAME: ${process.env.GCS_BUCKET_NAME}`);
 console.log(`GOOGLE_APPLICATION_CREDENTIALS: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`);
 console.log(`GOOGLE_CLOUD_PROJECT: ${process.env.GOOGLE_CLOUD_PROJECT}`);
+console.log(`ELASTICSEARCH_URL: ${process.env.ELASTICSEARCH_URL || 'not set'}`);
+console.log(`ELASTICSEARCH_USERNAME: ${process.env.ELASTICSEARCH_USERNAME ? '***' : 'not set'}`);
+console.log(`ELASTICSEARCH_PASSWORD: ${process.env.ELASTICSEARCH_PASSWORD ? '***' : 'not set'}`);
 
 // Create logger
 const logger = winston.createLogger({

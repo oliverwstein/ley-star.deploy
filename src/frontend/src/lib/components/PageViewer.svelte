@@ -310,7 +310,7 @@
           {manuscriptInfo?.title || 'Manuscript'} - Page {pageId}
         </h2>
         {#if transcriptRes && (!transcriptRes.ok && transcriptRes.status === 404)}
-          <div class="data-status-indicator">(Page Data Unavailable)</div>
+          <div class="data-status-indicator">(Not Yet Transcribed)</div>
         {/if}
       </div>
       <button

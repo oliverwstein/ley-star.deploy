@@ -124,7 +124,7 @@ async function fetchManuscriptIndex() {
   
   try {
     logger.info('Fetching manuscript index from cloud storage');
-    const indexPath = 'index.json';
+    const indexPath = 'catalogue/search-index.json';
     const file = storage.bucket(bucketName).file(indexPath);
     
     const [exists] = await file.exists();

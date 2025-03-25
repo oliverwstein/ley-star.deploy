@@ -203,8 +203,10 @@ def standardize_languages(languages: List[str]) -> List[str]:
     Returns:
         List of standardized ISO 639-3 language codes
     """
-    # Manual mapping for non-standard forms and special cases
+    # Manual mapping for non-standard forms, special cases, 
+    # and direct 2-to-3 letter ISO code mappings
     mapping = {
+        # Non-standard language names
         "Middle English": "enm",
         "English, Middle (1100-1500)": "enm",
         "French, Middle (ca.1400-1600)": "frm",
@@ -214,11 +216,43 @@ def standardize_languages(languages: List[str]) -> List[str]:
         "German, Middle High (ca.1050-1500)": "gmh",
         "No linguistic content; Not applicable": "zxx",
         "none": "zxx",
+        
+        # Common 2-letter to 3-letter ISO code mappings
+        "en": "eng",
+        "fr": "fra",  # Note: ISO 639-2/T uses "fra" not "fre"
+        "de": "deu",  # Note: ISO 639-2/T uses "deu" not "ger"
+        "it": "ita",
+        "es": "spa",
+        "la": "lat",  # Latin
+        "el": "ell",  # Greek (modern)
+        "ar": "ara",  # Arabic
+        "he": "heb",  # Hebrew
+        "ru": "rus",  # Russian
+        "zh": "zho",  # Chinese
+        "ja": "jpn",  # Japanese
+        "pt": "por",  # Portuguese
+        "nl": "nld",  # Dutch
+        "sv": "swe",  # Swedish
+        
+        # Common variations
+        "Latin": "lat",
+        "Greek": "grc",  # Assume Ancient Greek unless clearly specified as modern
+        "Greek, Modern": "ell",
+        "French": "fra",
+        "German": "deu",
+        "English": "eng",
+        "Italian": "ita",
+        "Spanish": "spa",
+        "Arabic": "ara",
+        "Hebrew": "heb",
     }
     
     standardized_langs = []
     
     for lang in languages:
+        if not lang:  # Skip empty values
+            continue
+            
         lang = str(lang).strip()
         
         # Check if we have a manual mapping
@@ -239,6 +273,14 @@ def standardize_languages(languages: List[str]) -> List[str]:
                 
             # Try lookup by alpha-2 if it looks like a code
             if len(lang) == 2:
+                # First check our mapping for common codes
+                if lang in mapping:
+                    code = mapping[lang]
+                    if code not in standardized_langs:
+                        standardized_langs.append(code)
+                    continue
+                    
+                # Try pycountry lookup
                 language = pycountry.languages.get(alpha_2=lang)
                 if language and hasattr(language, 'alpha_3'):
                     if language.alpha_3 not in standardized_langs:
@@ -252,42 +294,55 @@ def standardize_languages(languages: List[str]) -> List[str]:
                     if lang not in standardized_langs:
                         standardized_langs.append(lang)
                     continue
+                
+            # Try partial name matching for common languages
+            lower_lang = lang.lower()
+            for key, value in mapping.items():
+                if key.lower() in lower_lang or lower_lang in key.lower():
+                    if value not in standardized_langs:
+                        standardized_langs.append(value)
+                        break
+            else:  # No match found in the for loop
+                # If all lookups fail, keep the original if not already added
+                if lang not in standardized_langs:
+                    standardized_langs.append(lang)
+                    
         except Exception as e:
             logger.debug(f"Error looking up language '{lang}': {e}")
             
-        # If all lookups fail, keep the original if not already added
-        if lang not in standardized_langs:
-            standardized_langs.append(lang)
+            # If exception, keep the original if not already added
+            if lang not in standardized_langs:
+                standardized_langs.append(lang)
     
     return standardized_langs
 
 # Language metadata for client reference
 LANGUAGE_METADATA = {
     # Classical languages
-    "la": {"name": "Latin", "is_historical": True},
-    "grc": {"name": "Ancient Greek", "is_historical": True, "parent": "el"},
+    "lat": {"name": "Latin", "is_historical": True},
+    "grc": {"name": "Ancient Greek", "is_historical": True, "parent": "ell"},
     "chu": {"name": "Church Slavic", "is_historical": True},
     
     # Germanic languages
-    "en": {"name": "English"},
-    "enm": {"name": "Middle English", "is_historical": True, "parent": "en"},
-    "ang": {"name": "Old English", "is_historical": True, "parent": "en"},
-    "de": {"name": "German"},
-    "gmh": {"name": "Middle High German", "is_historical": True, "parent": "de"},
-    "goh": {"name": "Old High German", "is_historical": True, "parent": "de"},
+    "eng": {"name": "English"},
+    "enm": {"name": "Middle English", "is_historical": True, "parent": "eng"},
+    "ang": {"name": "Old English", "is_historical": True, "parent": "eng"},
+    "deu": {"name": "German"},
+    "gmh": {"name": "Middle High German", "is_historical": True, "parent": "deu"},
+    "goh": {"name": "Old High German", "is_historical": True, "parent": "deu"},
     
     # Romance languages
-    "fr": {"name": "French"},
-    "frm": {"name": "Middle French", "is_historical": True, "parent": "fr"},
-    "fro": {"name": "Old French", "is_historical": True, "parent": "fr"},
-    "it": {"name": "Italian"},
-    "es": {"name": "Spanish"},
-    "pt": {"name": "Portuguese"},
+    "fra": {"name": "French"},
+    "frm": {"name": "Middle French", "is_historical": True, "parent": "fra"},
+    "fro": {"name": "Old French", "is_historical": True, "parent": "fra"},
+    "ita": {"name": "Italian"},
+    "spa": {"name": "Spanish"},
+    "por": {"name": "Portuguese"},
     
     # Other languages
-    "ar": {"name": "Arabic"},
-    "el": {"name": "Greek"},
-    "he": {"name": "Hebrew"},
+    "ara": {"name": "Arabic"},
+    "ell": {"name": "Modern Greek"},
+    "heb": {"name": "Hebrew"},
     "zxx": {"name": "No linguistic content"},
 }
 

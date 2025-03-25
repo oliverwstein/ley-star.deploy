@@ -235,6 +235,92 @@
   function hasActiveFilters() {
     return Object.values(selectedFacets).some(values => values.length > 0) || searchQuery.trim() !== '';
   }
+  
+  // Sorting functionality
+  let sortField = 'title'; // Default sort by title
+  let sortDirection = 'asc'; // Default sort direction
+  $: sortKey = `${sortField}-${sortDirection}`; // Reactive value to trigger updates
+  
+  // Sort the manuscripts array
+  function getSortedManuscripts(manuscripts) {
+    if (!manuscripts || manuscripts.length === 0) return [];
+    
+    return [...manuscripts].sort((a, b) => {
+      let valueA, valueB;
+      
+      // Get sort values based on field
+      switch (sortField) {
+        case 'title':
+          valueA = a.title || '';
+          valueB = b.title || '';
+          break;
+        case 'date':
+          // Sort by start_year (oldest first in ascending)
+          valueA = a.start_year || Number.MAX_SAFE_INTEGER;
+          valueB = b.start_year || Number.MAX_SAFE_INTEGER;
+          break;
+        case 'pages':
+          valueA = a.page_count || 0;
+          valueB = b.page_count || 0;
+          break;
+        default:
+          valueA = a.title || '';
+          valueB = b.title || '';
+      }
+      
+      // Compare values
+      if (typeof valueA === 'string' && typeof valueB === 'string') {
+        // String comparison
+        const result = valueA.localeCompare(valueB);
+        return sortDirection === 'asc' ? result : -result;
+      } else {
+        // Numeric comparison
+        const result = valueA - valueB;
+        return sortDirection === 'asc' ? result : -result;
+      }
+    });
+  }
+  
+  // Handle sort by clicking on table headers
+  function handleSort(field) {
+    // Create local variables to avoid reactivity issues
+    let newDirection, newField;
+    
+    if (sortField === field) {
+      // If already sorting by this field, toggle direction
+      newDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+      newField = field;
+    } else {
+      // Otherwise, set new sort field and reset direction to asc
+      newField = field;
+      newDirection = 'asc';
+    }
+    
+    // Reset all state variables with a slight delay to ensure UI update
+    setTimeout(() => {
+      sortField = newField;
+      sortDirection = newDirection;
+      
+      // Force a re-render of the sorted manuscripts
+      manuscripts = [...manuscripts];
+    }, 0);
+  }
+  
+  // Get sort indicator for a column
+  function getSortIndicator(field) {
+    if (sortField !== field) return '';
+    return sortDirection === 'asc' ? '↑' : '↓';
+  }
+  
+  // Create a reactive variable for the whole component state to force updates
+  $: componentState = { 
+    sortField, 
+    sortDirection, 
+    searchQuery,
+    selectedFacets,
+    manuscripts,
+    showFilters
+  };
 </script>
 
 <div class="page-wrapper">
@@ -399,15 +485,36 @@
           <table class="manuscripts-table">
             <thead>
               <tr>
-                <th>Thumbnail</th>
-                <th>Title</th>
+                <th class="thumbnail-header"></th>
+                <th class="sortable-header" on:click={() => handleSort('title')}>
+                  Title 
+                  {#if sortField === 'title'}
+                    <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                  {:else}
+                    <span class="sort-indicator"></span>
+                  {/if}
+                </th>
                 <th>Languages</th>
-                <th>Date</th>
-                <th>Pages</th>
+                <th class="sortable-header" on:click={() => handleSort('date')}>
+                  Date 
+                  {#if sortField === 'date'}
+                    <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                  {:else}
+                    <span class="sort-indicator"></span>
+                  {/if}
+                </th>
+                <th class="sortable-header pages-column" on:click={() => handleSort('pages')}>
+                  Pages 
+                  {#if sortField === 'pages'}
+                    <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                  {:else}
+                    <span class="sort-indicator"></span>
+                  {/if}
+                </th>
               </tr>
             </thead>
             <tbody>
-              {#each manuscripts as manuscript}
+              {#each getSortedManuscripts(manuscripts) as manuscript}
                 <tr>
                   <td class="thumbnail-cell">
                     <a href="/#/manuscripts/{manuscript.id}">
@@ -723,9 +830,27 @@
   .manuscripts-table th {
     background-color: #f3f4f6;
     padding: 0.75rem;
-    text-align: left;
+    text-align: center;
     font-weight: 600;
     border-bottom: 2px solid #e5e7eb;
+  }
+  
+  .sortable-header {
+    cursor: pointer;
+    position: relative;
+    user-select: none;
+    transition: background-color 0.2s ease;
+  }
+  
+  .sortable-header:hover {
+    background-color: #e5e7eb;
+  }
+  
+  .sort-indicator {
+    display: inline-block;
+    width: 1rem;
+    font-weight: bold;
+    color: #4a5568;
   }
   
   .manuscripts-table td {
@@ -733,14 +858,31 @@
     border-bottom: 1px solid #e5e7eb;
     vertical-align: middle;
     background-color: white;
+    text-align: center;
+  }
+  
+  /* Title column cells should be left-aligned */
+  .manuscripts-table td:nth-child(2) {
+    text-align: left;
   }
   
   .manuscripts-table tr:hover td {
     background-color: #f9fafb;
   }
   
+  .thumbnail-header {
+    width: 80px;
+    min-width: 80px;
+  }
+  
   .thumbnail-cell {
     width: 80px;
+    min-width: 80px;
+  }
+  
+  .pages-column {
+    width: 100px;
+    min-width: 100px;
   }
   
   .thumbnail-cell img {
@@ -864,6 +1006,12 @@
     
     .search-filter-container {
       padding: 1rem;
+    }
+    
+    .results-info {
+      flex-wrap: wrap;
+      justify-content: flex-start;
+      gap: 0.5rem;
     }
   }
   

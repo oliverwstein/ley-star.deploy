@@ -6,6 +6,7 @@ const { Client } = require('@elastic/elasticsearch');
 const path = require('path');
 const dotenv = require('dotenv');
 const winston = require('winston');
+const { ManuscriptSearch } = require('./index-search');
 
 // Load environment variables
 dotenv.config();
@@ -42,6 +43,12 @@ const router = express.Router();
 // Initialize Google Cloud Storage
 let storage;
 let bucketName;
+
+// Cache for the manuscript index
+let manuscriptIndexCache = null;
+let indexLastFetched = null;
+const INDEX_CACHE_TTL = 1000 * 60 * 60; // 1 hour in milliseconds
+let searchInstance = null;
 
 try {
   console.log("Initializing Google Cloud Storage...");
@@ -108,6 +115,47 @@ if (!bucketName) {
   // Don't exit - process.exit(1);
 }
 
+// Function to fetch and cache the manuscript index
+async function fetchManuscriptIndex() {
+  if (manuscriptIndexCache && indexLastFetched && Date.now() - indexLastFetched < INDEX_CACHE_TTL) {
+    logger.info('Using cached manuscript index');
+    return manuscriptIndexCache;
+  }
+  
+  try {
+    logger.info('Fetching manuscript index from cloud storage');
+    const indexPath = 'index.json';
+    const file = storage.bucket(bucketName).file(indexPath);
+    
+    const [exists] = await file.exists();
+    if (!exists) {
+      logger.error(`Index file not found at path: ${indexPath}`);
+      return null;
+    }
+    
+    const [content] = await file.download();
+    const indexData = JSON.parse(content.toString());
+    
+    // Cache the index
+    manuscriptIndexCache = indexData;
+    indexLastFetched = Date.now();
+    
+    // Initialize the search instance
+    searchInstance = new ManuscriptSearch(indexData);
+    
+    logger.info(`Manuscript index fetched and cached with ${indexData.documents?.length || 0} documents`);
+    return indexData;
+  } catch (error) {
+    logger.error(`Error fetching manuscript index: ${error.message}`);
+    return null;
+  }
+}
+
+// Initial fetch of the index when server starts
+fetchManuscriptIndex().catch(err => {
+  logger.error(`Initial index fetch failed: ${err.message}`);
+});
+
 // Middleware for the router
 router.use(cors());
 router.use(express.json());
@@ -144,7 +192,9 @@ router.get('/', (req, res) => {
       '/manuscripts/:id/pages/:pageId/image',
       '/manuscripts/:id/pages/:pageId/thumbnail',
       '/manuscripts/:id/pages/:pageId/segmentation',
-      '/manuscripts/:id/pages/:pageId/transcript'
+      '/manuscripts/:id/pages/:pageId/transcript',
+      '/search',
+      '/search/index'
     ]
   });
 });
@@ -506,6 +556,112 @@ router.get('/manuscripts/:id/pages/:pageId/transcript', async (req, res, next) =
     res.json(transcriptData);
   } catch (error) {
     logger.error(`Error retrieving transcript data: ${error.message}`);
+    next(error);
+  }
+});
+
+// Get search index metadata
+router.get('/search/index', async (req, res, next) => {
+  try {
+    // Make sure index is loaded
+    const index = await fetchManuscriptIndex();
+    
+    if (!index) {
+      return res.status(500).json({ error: 'Failed to load search index' });
+    }
+    
+    // Return only the metadata portion of the index
+    res.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+    res.json({
+      metadata: index.metadata,
+      facets: {
+        languages: Object.keys(index.facets.languages || {}),
+        material_keywords: Object.keys(index.facets.material_keywords || {}),
+        script_keywords: Object.keys(index.facets.script_keywords || {}),
+        repository: Object.keys(index.facets.repository || {})
+      }
+    });
+  } catch (error) {
+    logger.error(`Error retrieving search index metadata: ${error.message}`);
+    next(error);
+  }
+});
+
+// Search manuscripts endpoint
+router.post('/search', async (req, res, next) => {
+  try {
+    // Check if search instance is initialized
+    if (!searchInstance) {
+      // Try to fetch and initialize the index if not yet done
+      const index = await fetchManuscriptIndex();
+      if (!index || !searchInstance) {
+        return res.status(500).json({ error: 'Search index not available' });
+      }
+    }
+    
+    const searchQuery = req.body;
+    
+    // Validate the query
+    if (!searchQuery || typeof searchQuery !== 'object') {
+      return res.status(400).json({ error: 'Invalid search query format' });
+    }
+    
+    // Process the search query
+    const operations = [];
+    
+    // Process text search
+    if (searchQuery.text) {
+      operations.push(searchInstance.textSearch({
+        fields: searchQuery.text.fields || ['title', 'shelfmark', 'authors', 'brief'],
+        query: searchQuery.text.query,
+        matchType: searchQuery.text.matchType || 'contains'
+      }));
+    }
+    
+    // Process facet searches
+    if (searchQuery.facets) {
+      Object.entries(searchQuery.facets).forEach(([facetType, facetOptions]) => {
+        if (facetOptions.values && facetOptions.values.length > 0) {
+          operations.push(searchInstance.facetSearch({
+            facetType: facetType,
+            values: facetOptions.values,
+            matchType: facetOptions.matchType || 'any'
+          }));
+        }
+      });
+    }
+    
+    // Process date range search
+    if (searchQuery.dateRange) {
+      operations.push(searchInstance.dateRangeSearch(searchQuery.dateRange));
+    }
+    
+    // Execute the search
+    const searchResults = searchInstance.search({
+      operations,
+      operator: searchQuery.operator || 'AND'
+    });
+    
+    // Apply pagination if requested
+    const page = parseInt(searchQuery.page || '1', 10);
+    const limit = parseInt(searchQuery.limit || '20', 10);
+    
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    
+    const paginatedItems = searchResults.items.slice(startIndex, endIndex);
+    
+    // Send the response
+    res.json({
+      total: searchResults.total,
+      page,
+      limit,
+      totalPages: Math.ceil(searchResults.total / limit),
+      items: paginatedItems,
+      facetCounts: searchResults.facetCounts
+    });
+  } catch (error) {
+    logger.error(`Search error: ${error.message}`);
     next(error);
   }
 });

@@ -67,8 +67,8 @@ app.get('*', (req, res, next) => {
   }
 });
 
-// Start the server
-app.listen(PORT, () => {
+// Start the server with proper error handling
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`API is available at http://localhost:${PORT}/api`);
   
@@ -77,6 +77,29 @@ app.listen(PORT, () => {
   } else {
     console.log('To run the frontend in development:');
     console.log('  cd src/frontend && npm run dev');
+  }
+});
+
+// Handle server errors
+server.on('error', (error) => {
+  console.error('Server error:', error);
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Try using a different port.`);
+    process.exit(1);
+  }
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Keep the process alive in production
+  if (process.env.NODE_ENV !== 'production') {
+    process.exit(1);
   }
 });
 

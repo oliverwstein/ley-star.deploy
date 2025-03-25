@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const { Storage } = require('@google-cloud/storage');
-const { Client } = require('@elastic/elasticsearch');
 const path = require('path');
 const dotenv = require('dotenv');
 const winston = require('winston');
@@ -11,14 +10,13 @@ const { ManuscriptSearch } = require('./index-search');
 // Load environment variables
 dotenv.config();
 
-// Log all environment variables for debugging
+// Log essential environment variables for debugging
 console.log('Environment variables:');
 console.log(`GCS_BUCKET_NAME: ${process.env.GCS_BUCKET_NAME}`);
-console.log(`GOOGLE_APPLICATION_CREDENTIALS: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`);
-console.log(`GOOGLE_CLOUD_PROJECT: ${process.env.GOOGLE_CLOUD_PROJECT}`);
-console.log(`ELASTICSEARCH_URL: ${process.env.ELASTICSEARCH_URL || 'not set'}`);
-console.log(`ELASTICSEARCH_USERNAME: ${process.env.ELASTICSEARCH_USERNAME ? '***' : 'not set'}`);
-console.log(`ELASTICSEARCH_PASSWORD: ${process.env.ELASTICSEARCH_PASSWORD ? '***' : 'not set'}`);
+console.log(`GOOGLE_APPLICATION_CREDENTIALS: ${process.env.GOOGLE_APPLICATION_CREDENTIALS || 'using default credentials'}`);
+console.log(`GOOGLE_CLOUD_PROJECT: ${process.env.GOOGLE_CLOUD_PROJECT || 'using default project'}`);
+console.log(`NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
+console.log(`PORT: ${process.env.PORT || '8080 (default)'}`);
 
 // Create logger
 const logger = winston.createLogger({

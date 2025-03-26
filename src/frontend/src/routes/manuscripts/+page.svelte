@@ -664,6 +664,7 @@
     background-color: rgba(255, 255, 255, 0.95);
     border-radius: 8px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    color: #333; /* Ensure all text has a default dark color */
   }
   
   h1 {
@@ -800,6 +801,7 @@
     flex-wrap: wrap;
     gap: 1.5rem;
     margin-top: 1rem;
+    color: #333; /* Ensure filter column text has a default dark color */
   }
   
   .filter-column {
@@ -875,6 +877,7 @@
     flex: 1;
     margin-left: 0.5rem;
     font-size: 0.9rem;
+    color: #333; /* Ensure text is dark on all devices */
   }
   
   .facet-count {
@@ -1125,6 +1128,15 @@
     
     .manuscripts-container {
       padding: 0.75rem;
+      color: #333 !important; /* Force dark text on mobile */
+    }
+    
+    /* Ensure all text elements in the filters have proper color on mobile */
+    .facet-item label,
+    .facet-label,
+    .filter-hint,
+    .facet-count {
+      color: #333 !important;
     }
   }
 </style>

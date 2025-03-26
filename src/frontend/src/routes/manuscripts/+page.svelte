@@ -17,11 +17,12 @@
   
   // Search parameters
   let searchQuery = "";
+  // Store both included and excluded facets separately
   let selectedFacets = {
-    languages: [],
-    material_keywords: [],
-    script_keywords: [],
-    repository: []
+    languages: { include: [], exclude: [] },
+    material_keywords: { include: [], exclude: [] },
+    script_keywords: { include: [], exclude: [] },
+    repository: { include: [], exclude: [] }
   };
   
   // Available facet options from the index
@@ -89,16 +90,30 @@
         };
       }
       
-      // Add facet filters if any are selected
+      // Add facet filters with both include and exclude
       const facetsToAdd = {};
       let hasFacets = false;
       
-      Object.entries(selectedFacets).forEach(([facetType, values]) => {
-        if (values.length > 0) {
-          facetsToAdd[facetType] = {
-            values: values,
-            matchType: 'any'
-          };
+      Object.entries(selectedFacets).forEach(([facetType, { include, exclude }]) => {
+        if (include.length > 0 || exclude.length > 0) {
+          facetsToAdd[facetType] = {};
+          
+          // Handle included facets (OR within the same facet type)
+          if (include.length > 0) {
+            facetsToAdd[facetType].include = {
+              values: include,
+              matchType: 'any'
+            };
+          }
+          
+          // Handle excluded facets (NOT)
+          if (exclude.length > 0) {
+            facetsToAdd[facetType].exclude = {
+              values: exclude,
+              matchType: 'any'
+            };
+          }
+          
           hasFacets = true;
         }
       });
@@ -150,16 +165,22 @@
     searchManuscripts();
   }
   
-  // Toggle a facet selection
+  // Toggle a facet selection - cycles through three states: none -> include -> exclude -> none
   function toggleFacet(facetType, value) {
-    const index = selectedFacets[facetType].indexOf(value);
+    const includeIndex = selectedFacets[facetType].include.indexOf(value);
+    const excludeIndex = selectedFacets[facetType].exclude.indexOf(value);
     
-    if (index === -1) {
-      // Add the facet value
-      selectedFacets[facetType] = [...selectedFacets[facetType], value];
+    // Cycle through states: none -> include -> exclude -> none
+    if (includeIndex === -1 && excludeIndex === -1) {
+      // Not selected, add to include
+      selectedFacets[facetType].include = [...selectedFacets[facetType].include, value];
+    } else if (includeIndex !== -1) {
+      // Currently included, move to exclude
+      selectedFacets[facetType].include = selectedFacets[facetType].include.filter(v => v !== value);
+      selectedFacets[facetType].exclude = [...selectedFacets[facetType].exclude, value];
     } else {
-      // Remove the facet value
-      selectedFacets[facetType] = selectedFacets[facetType].filter(v => v !== value);
+      // Currently excluded, remove completely
+      selectedFacets[facetType].exclude = selectedFacets[facetType].exclude.filter(v => v !== value);
     }
     
     // Update the selection and search
@@ -172,10 +193,10 @@
   function clearFilters() {
     searchQuery = "";
     selectedFacets = {
-      languages: [],
-      material_keywords: [],
-      script_keywords: [],
-      repository: []
+      languages: { include: [], exclude: [] },
+      material_keywords: { include: [], exclude: [] },
+      script_keywords: { include: [], exclude: [] },
+      repository: { include: [], exclude: [] }
     };
     currentPage = 1;
     searchManuscripts();
@@ -219,9 +240,14 @@
     });
   }
   
-  // Check if a facet is selected
-  function isFacetSelected(facetType, value) {
-    return selectedFacets[facetType].includes(value);
+  // Check the state of a facet: 'include', 'exclude', or ''
+  function getFacetState(facetType, value) {
+    if (selectedFacets[facetType].include.includes(value)) {
+      return 'include';
+    } else if (selectedFacets[facetType].exclude.includes(value)) {
+      return 'exclude';
+    }
+    return '';
   }
   
   // Filter visibility toggle
@@ -233,7 +259,9 @@
   
   // Check if any filters are applied
   function hasActiveFilters() {
-    return Object.values(selectedFacets).some(values => values.length > 0) || searchQuery.trim() !== '';
+    return Object.values(selectedFacets).some(values => 
+      values.include.length > 0 || values.exclude.length > 0
+    ) || searchQuery.trim() !== '';
   }
   
   // Sorting functionality
@@ -319,7 +347,13 @@
     searchQuery,
     selectedFacets,
     manuscripts,
-    showFilters
+    showFilters,
+    facetStates: Object.fromEntries(
+      Object.entries(selectedFacets).flatMap(([type, {include, exclude}]) => 
+        [...include.map(val => [`${type}:${val}`, 'include']), 
+         ...exclude.map(val => [`${type}:${val}`, 'exclude'])]
+      )
+    )
   };
 </script>
 
@@ -364,6 +398,9 @@
     <!-- Filter section header -->
     <div class="filter-header">
       <h2>Filter By</h2>
+      <div class="filter-hint">
+        <small>Click on checkboxes to include (✓) or exclude (✕) attributes</small>
+      </div>
     </div>
     
     <!-- Filter columns -->
@@ -375,12 +412,18 @@
           {#if availableFacets.repository}
             {#each availableFacets.repository as repo}
               <div class="facet-item">
-                <label class:selected={isFacetSelected('repository', repo)}>
-                  <input 
-                    type="checkbox" 
-                    checked={isFacetSelected('repository', repo)} 
-                    on:change={() => toggleFacet('repository', repo)}
-                  />
+                <label class:selected-include={componentState.facetStates[`repository:${repo}`] === 'include'} 
+                       class:selected-exclude={componentState.facetStates[`repository:${repo}`] === 'exclude'}>
+                  <div class="facet-checkbox" 
+                       class:include={componentState.facetStates[`repository:${repo}`] === 'include'}
+                       class:exclude={componentState.facetStates[`repository:${repo}`] === 'exclude'}
+                       on:click={() => toggleFacet('repository', repo)}>
+                    {#if componentState.facetStates[`repository:${repo}`] === 'include'}
+                      <span class="checkbox-icon">✓</span>
+                    {:else if componentState.facetStates[`repository:${repo}`] === 'exclude'}
+                      <span class="checkbox-icon">✕</span>
+                    {/if}
+                  </div>
                   <span class="facet-label">{repo}</span>
                   <span class="facet-count">{getFacetCount('repository', repo)}</span>
                 </label>
@@ -401,12 +444,18 @@
                 return nameA.localeCompare(nameB);
               }) as lang}
               <div class="facet-item">
-                <label class:selected={isFacetSelected('languages', lang)}>
-                  <input 
-                    type="checkbox" 
-                    checked={isFacetSelected('languages', lang)} 
-                    on:change={() => toggleFacet('languages', lang)}
-                  />
+                <label class:selected-include={componentState.facetStates[`languages:${lang}`] === 'include'} 
+                       class:selected-exclude={componentState.facetStates[`languages:${lang}`] === 'exclude'}>
+                  <div class="facet-checkbox" 
+                       class:include={componentState.facetStates[`languages:${lang}`] === 'include'}
+                       class:exclude={componentState.facetStates[`languages:${lang}`] === 'exclude'}
+                       on:click={() => toggleFacet('languages', lang)}>
+                    {#if componentState.facetStates[`languages:${lang}`] === 'include'}
+                      <span class="checkbox-icon">✓</span>
+                    {:else if componentState.facetStates[`languages:${lang}`] === 'exclude'}
+                      <span class="checkbox-icon">✕</span>
+                    {/if}
+                  </div>
                   <span class="facet-label">{formatLanguage(lang)}</span>
                   <span class="facet-count">{getFacetCount('languages', lang)}</span>
                 </label>
@@ -423,12 +472,18 @@
           {#if availableFacets.material_keywords}
             {#each availableFacets.material_keywords as material}
               <div class="facet-item">
-                <label class:selected={isFacetSelected('material_keywords', material)}>
-                  <input 
-                    type="checkbox" 
-                    checked={isFacetSelected('material_keywords', material)} 
-                    on:change={() => toggleFacet('material_keywords', material)}
-                  />
+                <label class:selected-include={componentState.facetStates[`material_keywords:${material}`] === 'include'} 
+                       class:selected-exclude={componentState.facetStates[`material_keywords:${material}`] === 'exclude'}>
+                  <div class="facet-checkbox" 
+                       class:include={componentState.facetStates[`material_keywords:${material}`] === 'include'}
+                       class:exclude={componentState.facetStates[`material_keywords:${material}`] === 'exclude'}
+                       on:click={() => toggleFacet('material_keywords', material)}>
+                    {#if componentState.facetStates[`material_keywords:${material}`] === 'include'}
+                      <span class="checkbox-icon">✓</span>
+                    {:else if componentState.facetStates[`material_keywords:${material}`] === 'exclude'}
+                      <span class="checkbox-icon">✕</span>
+                    {/if}
+                  </div>
                   <span class="facet-label">{material}</span>
                   <span class="facet-count">{getFacetCount('material_keywords', material)}</span>
                 </label>
@@ -445,12 +500,18 @@
           {#if availableFacets.script_keywords}
             {#each availableFacets.script_keywords as script}
               <div class="facet-item">
-                <label class:selected={isFacetSelected('script_keywords', script)}>
-                  <input 
-                    type="checkbox" 
-                    checked={isFacetSelected('script_keywords', script)} 
-                    on:change={() => toggleFacet('script_keywords', script)}
-                  />
+                <label class:selected-include={componentState.facetStates[`script_keywords:${script}`] === 'include'} 
+                       class:selected-exclude={componentState.facetStates[`script_keywords:${script}`] === 'exclude'}>
+                  <div class="facet-checkbox" 
+                       class:include={componentState.facetStates[`script_keywords:${script}`] === 'include'}
+                       class:exclude={componentState.facetStates[`script_keywords:${script}`] === 'exclude'}
+                       on:click={() => toggleFacet('script_keywords', script)}>
+                    {#if componentState.facetStates[`script_keywords:${script}`] === 'include'}
+                      <span class="checkbox-icon">✓</span>
+                    {:else if componentState.facetStates[`script_keywords:${script}`] === 'exclude'}
+                      <span class="checkbox-icon">✕</span>
+                    {/if}
+                  </div>
                   <span class="facet-label">{script}</span>
                   <span class="facet-count">{getFacetCount('script_keywords', script)}</span>
                 </label>
@@ -728,6 +789,12 @@
     font-size: 1.25rem;
   }
   
+  .filter-hint {
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+    color: #6b7280;
+  }
+  
   .filter-columns {
     display: flex;
     flex-wrap: wrap;
@@ -765,8 +832,43 @@
     background-color: #f3f4f6;
   }
   
-  .facet-item label.selected {
+  .facet-item label.selected-include {
     background-color: #e5e7eb;
+  }
+  
+  .facet-item label.selected-exclude {
+    background-color: #fee2e2;
+  }
+  
+  .facet-checkbox {
+    width: 18px;
+    height: 18px;
+    min-width: 18px; /* Prevent shrinking */
+    border: 1px solid #d1d5db;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    margin-right: 0.5rem;
+    font-size: 12px;
+    font-weight: bold;
+  }
+  
+  .facet-checkbox.include {
+    background-color: #3b82f6;
+    border-color: #3b82f6;
+    color: white;
+  }
+  
+  .facet-checkbox.exclude {
+    background-color: #ef4444;
+    border-color: #ef4444;
+    color: white;
+  }
+  
+  .checkbox-icon {
+    line-height: 1;
   }
   
   .facet-label {

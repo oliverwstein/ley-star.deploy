@@ -72,6 +72,8 @@ The following endpoints are available:
 
 - `GET /health` - Health check endpoint
 - `GET /api/manuscripts` - List all available manuscripts
+- `POST /search` - Search the index
+- `GET /search/index` - Retrieve the index
 - `GET /api/manuscripts/:id` - Get metadata for a specific manuscript
 - `GET /api/manuscripts/:id/pages` - List all pages for a manuscript
 - `GET /api/manuscripts/:id/pages/:pageId` - Get available files for a specific page

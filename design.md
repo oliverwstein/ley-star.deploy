@@ -1,33 +1,27 @@
 # Ley-Star Project Structure
 
-## Planned Structure
+## Current Structure
 ```
 ley-star.deploy/
 ├── src/                      # Project source code
 │   ├── api/                  # Express API code
-│   │   └── index.js          # API routes and logic
-│   ├── frontend/             # SvelteKit app
-│   │   ├── app.html          # SvelteKit app shell
-│   │   ├── app.css           # Global styles
-│   │   ├── lib/              # Shared code for client and server
+│   │   ├── index.js          # API routes and logic
+│   │   └── index-search.ts   # Manuscript search implementation
+│   ├── frontend/             # Svelte app
+│   │   ├── lib/              # Shared code for client
 │   │   │   ├── components/   # Reusable Svelte components
-│   │   │   │   ├── Banner.svelte
-│   │   │   │   ├── ManuscriptViewer.svelte
-│   │   │   │   ├── PageNavigator.svelte
-│   │   │   │   └── ...
-│   │   │   ├── utils/        # Helper functions
-│   │   │   └── types.js      # JS with JSDoc for type hints (optional)
-│   │   ├── routes/           # SvelteKit routes
+│   │   │   └── stores.js     # Svelte stores
+│   │   ├── routes/           # Svelte routes
 │   │   │   ├── +layout.svelte # Main layout
 │   │   │   ├── +page.svelte  # Homepage
 │   │   │   ├── manuscripts/  # Manuscript routes
-│   │   │   │   ├── +page.svelte # Manuscript listing
+│   │   │   │   ├── +page.svelte # Manuscript listing with search/filters
 │   │   │   │   └── [id]/     # Individual manuscript
-│   │   │   │       ├── +page.svelte
-│   │   │   │       └── pages/[pageNum]/+page.svelte
 │   │   ├── static/           # Static assets (images, favicon, etc.)
-│   │   ├── svelte.config.js  # SvelteKit config
+│   │   ├── svelte.config.js  # Svelte config
 │   │   └── vite.config.js    # Vite config
+├── scripts/                  # Utility scripts
+│   ├── index_manuscripts.py  # Script to create search index
 ├── server.js                 # Combined server entry point
 └── package.json              # Dependencies for both
 ```
@@ -35,31 +29,36 @@ ley-star.deploy/
 ## Component Structure
 
 ### Main Components
-- **Banner.svelte**: Navigation header with site branding
-- **ManuscriptList.svelte**: Grid/list view of available manuscripts
-- **ManuscriptViewer.svelte**: Main viewer for a single manuscript
-- **PageNavigator.svelte**: Interface for navigating between pages
-- **TranscriptView.svelte**: Display transcript data with features
+- **Manuscript List Page**: Tabular view of manuscripts with search, filter, sort
+- **ManuscriptViewer**: Main viewer for a single manuscript
+- **PageNavigator**: Interface for navigating between pages
 
 ### Page Routes
-- **/** - Homepage with featured manuscripts
-- **/manuscripts** - Browse all manuscripts
+- **/** - Homepage redirects to manuscripts
+- **/manuscripts** - Browse/search all manuscripts
 - **/manuscripts/[id]** - View a specific manuscript
 - **/manuscripts/[id]/pages/[pageNum]** - View a specific page
 
+## Search and Filter Features
+- Client-side search implementation for manuscript data
+- Advanced boolean faceted filtering (include/exclude)
+- Sorting by title, date, and page count
+- Responsive filter UI with collapsible panels
+
 ## API Integration
-- Frontend components will fetch data from the Express API
+- Frontend components fetch data from the Express API
 - API endpoints are mounted at `/api/...`
-- All manuscript data comes from Google Cloud Storage
+- Manuscript data retrieved from Google Cloud Storage
+- API caches manuscript index for improved performance
 
 ## Data Flow
 1. User navigates to a route
-2. SvelteKit loads the appropriate component
-3. Component requests data from API endpoints
-4. API retrieves data from Google Cloud Storage
-5. Component renders the data with appropriate UI
+2. Component requests data from API endpoints
+3. API retrieves and caches data from Google Cloud Storage
+4. Component renders the data with appropriate UI
+5. Search/filter operations use cached index for performance
 
 ## Styling Approach
-- Global styles in app.css
 - Component-specific styles using Svelte's scoped styling
 - Responsive design for all screen sizes
+- Mobile-optimized interfaces

@@ -1,6 +1,6 @@
 # Ley-Star Manuscript Viewer
 
-A web application for viewing, searching, and exploring historical manuscripts stored in Google Cloud Storage with Elasticsearch-powered search capabilities.
+A web application for viewing, searching, and exploring historical manuscripts stored in Google Cloud Storage with basic search capabilities.
 
 ## Project Overview
 
@@ -8,7 +8,7 @@ Ley-Star is a platform that provides access to digitized manuscripts with rich m
 
 - **Backend API**: Node.js Express server accessing manuscript data from Google Cloud Storage
 - **Frontend**: Svelte-based SPA for browsing and viewing manuscripts
-- **Search**: Elasticsearch integration for full-text and metadata search
+- **Search**: Lightweight metadata search using indexing
 - **Indexer**: Scripts for processing manuscript metadata and creating search indices
 
 ## Directory Structure
@@ -23,7 +23,7 @@ ley-star.deploy/
 ├── scripts/
 │   ├── convert_svelte_files.py   # Utility script for Svelte components
 │   ├── image-processor.ts        # Image processing utilities
-│   ├── index_manuscripts.js      # Elasticsearch indexing script
+│   ├── index_manuscripts.js      # Manuscript indexing script for simple search
 │   └── upload-manuscript.ts      # Script for uploading new manuscripts
 ├── server.js                     # Main Express server entry point
 ├── src/
@@ -65,7 +65,6 @@ ley-star.deploy/
 - Navigate manuscript pages with high-quality images
 - Search manuscripts by content, metadata, and historical context
 - View transcriptions aligned with manuscript images
-- Semantic search using vector embeddings
 
 ## API Endpoints
 
@@ -105,7 +104,6 @@ bucket-root/
 
 - Node.js v18 or later
 - Google Cloud Storage bucket with manuscript data
-- Elasticsearch (local or cloud) for search functionality
 
 ### Environment Variables
 
@@ -117,13 +115,6 @@ GCS_BUCKET_NAME=your-manuscripts-bucket
 GOOGLE_APPLICATION_CREDENTIALS=path/to/credentials.json
 GOOGLE_CLOUD_PROJECT=your-project-id
 
-# Elasticsearch
-ELASTICSEARCH_URL=http://localhost:9200
-ELASTICSEARCH_USERNAME=elastic
-ELASTICSEARCH_PASSWORD=your-password
-
-# Optional for vector embeddings
-EMBEDDING_API_URL=http://localhost:8080/embed
 ```
 
 ### Installation
@@ -155,7 +146,7 @@ npm start
 
 ### Indexing Manuscripts
 
-To index manuscripts into Elasticsearch:
+To index manuscripts:
 
 ```bash
 node scripts/index_manuscripts.js

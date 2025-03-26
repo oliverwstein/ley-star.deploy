@@ -616,10 +616,32 @@ router.post('/search', async (req, res, next) => {
       }));
     }
     
-    // Process facet searches
+    // Process facet searches with include/exclude support
     if (searchQuery.facets) {
       Object.entries(searchQuery.facets).forEach(([facetType, facetOptions]) => {
-        if (facetOptions.values && facetOptions.values.length > 0) {
+        // Handle the new structure with separate include and exclude
+        if (typeof facetOptions === 'object') {
+          // Process included facets (values to match)
+          if (facetOptions.include && facetOptions.include.values && facetOptions.include.values.length > 0) {
+            operations.push(searchInstance.facetSearch({
+              facetType: facetType,
+              values: facetOptions.include.values,
+              matchType: facetOptions.include.matchType || 'any'
+            }));
+          }
+          
+          // Process excluded facets (values to exclude)
+          if (facetOptions.exclude && facetOptions.exclude.values && facetOptions.exclude.values.length > 0) {
+            // For exclusions, we use the 'none' matchType to negate the matches
+            operations.push(searchInstance.facetSearch({
+              facetType: facetType,
+              values: facetOptions.exclude.values,
+              matchType: 'none'
+            }));
+          }
+        } 
+        // Backward compatibility with old format
+        else if (facetOptions.values && facetOptions.values.length > 0) {
           operations.push(searchInstance.facetSearch({
             facetType: facetType,
             values: facetOptions.values,

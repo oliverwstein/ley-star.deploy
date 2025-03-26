@@ -751,6 +751,67 @@ def build_search_index(processed_documents: List[Dict[str, Any]]) -> Dict[str, A
     }
 
 # --------------------------------
+# INDEX LOADING AND CHECKING FUNCTIONS
+# --------------------------------
+
+def load_existing_index(bucket) -> Dict[str, Any]:
+    """
+    Load the existing search index from Google Cloud Storage
+    
+    Args:
+        bucket: GCS bucket object
+        
+    Returns:
+        The existing search index or None if it doesn't exist
+    """
+    logger.info(f"Checking for existing index at: gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}")
+    
+    try:
+        # Check if the index file exists
+        blob = bucket.blob(CLOUD_OUTPUT_PATH)
+        if not blob.exists():
+            logger.info("No existing index found")
+            return None
+        
+        # Download to a temporary file
+        with tempfile.NamedTemporaryFile(suffix=".json") as temp_file:
+            blob.download_to_filename(temp_file.name)
+            
+            # Read and parse
+            with open(temp_file.name, 'r') as f:
+                index_data = json.load(f)
+                
+            # Validate the index structure
+            if not isinstance(index_data, dict) or 'documents' not in index_data:
+                logger.warning("Existing index has invalid structure")
+                return None
+                
+            # Get manuscript count
+            manuscript_count = len(index_data.get('documents', []))
+            logger.info(f"Loaded existing index with {manuscript_count} manuscripts")
+            
+            return index_data
+                
+    except Exception as e:
+        logger.warning(f"Error loading existing index: {str(e)}")
+        return None
+
+def get_indexed_manuscript_ids(index_data: Dict[str, Any]) -> set:
+    """
+    Extract the set of manuscript IDs that are already indexed
+    
+    Args:
+        index_data: The existing search index
+        
+    Returns:
+        Set of manuscript IDs
+    """
+    if not index_data or 'documents' not in index_data:
+        return set()
+        
+    return {doc.get('id') for doc in index_data['documents'] if doc.get('id')}
+
+# --------------------------------
 # GOOGLE CLOUD STORAGE FUNCTIONS
 # --------------------------------
 
@@ -836,10 +897,13 @@ def upload_search_index(bucket, search_index: Dict[str, Any]) -> Dict[str, Any]:
 # MAIN FUNCTION
 # --------------------------------
 
-def generate_search_index() -> Dict[str, Any]:
+def generate_search_index(args) -> Dict[str, Any]:
     """
     Main function to generate the search index
     
+    Args:
+        args: Command line arguments
+        
     Returns:
         Result information
     """
@@ -860,10 +924,54 @@ def generate_search_index() -> Dict[str, Any]:
         
         logger.info(f"Using GCS bucket: {GCS_BUCKET_NAME}")
         
-        # Get metadata files from GCS
-        metadata_files = get_metadata_files_from_gcs(bucket)
+        # See if we're using the --force flag
+        force_reindex = args.force
         
-        # Process all manuscripts
+        # Load existing index if it exists (unless forcing a full reindex)
+        existing_index = None if force_reindex else load_existing_index(bucket)
+        indexed_manuscript_ids = set()
+        
+        # If we have an existing index and aren't forcing a reindex, 
+        # get the IDs of already-indexed manuscripts
+        if existing_index is not None and not force_reindex:
+            indexed_manuscript_ids = get_indexed_manuscript_ids(existing_index)
+            logger.info(f"Found {len(indexed_manuscript_ids)} manuscripts in existing index")
+        
+        # Get metadata files from GCS
+        all_metadata_files = get_metadata_files_from_gcs(bucket)
+        
+        # If we're not forcing a reindex, filter out manuscripts that are already indexed
+        if not force_reindex and existing_index is not None:
+            metadata_files = [
+                file_info for file_info in all_metadata_files 
+                if file_info["manuscriptId"] not in indexed_manuscript_ids
+            ]
+            logger.info(f"Found {len(metadata_files)} new manuscripts to index (out of {len(all_metadata_files)} total)")
+        else:
+            # If forcing a reindex or no existing index, process all manuscripts
+            metadata_files = all_metadata_files
+            if force_reindex:
+                logger.info(f"Forcing reindex of all {len(metadata_files)} manuscripts")
+        
+        # If no new manuscripts and we have an existing index, just return it
+        if len(metadata_files) == 0 and existing_index is not None:
+            logger.info("No new manuscripts to index, keeping existing index")
+            
+            # Get the size of the existing index
+            blob = bucket.blob(CLOUD_OUTPUT_PATH)
+            existing_size = blob.size
+            
+            return {
+                "success": True,
+                "documents": len(existing_index.get('documents', [])),
+                "cloudPath": f"gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}",
+                "cloudFileSize": existing_size,
+                "localPath": None,
+                "localFileSize": 0,
+                "message": "No new manuscripts found, kept existing index"
+            }
+        
+        # Process manuscripts (either all of them or just the new ones)
         processed_documents = []
         error_count = 0
         
@@ -898,29 +1006,54 @@ def generate_search_index() -> Dict[str, Any]:
                 logger.error(f"Error processing {file_path}: {str(e)}")
                 error_count += 1
         
-        # Build the search index
-        search_index = build_search_index(processed_documents)
+        # If we're updating an existing index and have new documents, merge them
+        if existing_index is not None and not force_reindex and processed_documents:
+            logger.info(f"Merging {len(processed_documents)} new documents with existing index")
+            
+            # Extract existing documents
+            existing_docs = existing_index.get('documents', [])
+            existing_full_metadata = []
+            
+            # We need to create full metadata entries for the existing docs
+            # This is a simplified version since we don't have all the original data
+            for doc in existing_docs:
+                existing_full_metadata.append({
+                    "document": doc,
+                    "fullMetadata": {**doc}  # Copy the document as fullMetadata
+                })
+            
+            # Combine the existing and new documents
+            all_documents = existing_full_metadata + processed_documents
+            
+            # Rebuild the index with all documents
+            search_index = build_search_index(all_documents)
+        else:
+            # Build a fresh index with just the processed documents
+            search_index = build_search_index(processed_documents)
         
         # Upload to Google Cloud Storage
         upload_result = upload_search_index(bucket, search_index)
         
         # Optionally save locally
         local_file_size = 0
-        if SAVE_LOCAL_COPY:
+        if SAVE_LOCAL_COPY or args.save_local:
             # Ensure output directory exists
-            os.makedirs(os.path.dirname(LOCAL_OUTPUT_PATH), exist_ok=True)
+            output_path = args.output or LOCAL_OUTPUT_PATH
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
             # Write index to file
-            with open(LOCAL_OUTPUT_PATH, 'w') as f:
+            with open(output_path, 'w') as f:
                 json.dump(search_index, f)
                 
-            local_file_size = os.path.getsize(LOCAL_OUTPUT_PATH)
-            logger.info(f"Also saved index locally to {LOCAL_OUTPUT_PATH}")
+            local_file_size = os.path.getsize(output_path)
+            logger.info(f"Also saved index locally to {output_path}")
         
         # Print size info
         cloud_size_mb = upload_result['size'] / (1024 * 1024)
+        
+        action_msg = "regenerated" if force_reindex else "updated" if existing_index else "generated"
         logger.info(f"""
-Index generation complete:
+Index {action_msg} successfully:
 - Documents indexed: {search_index['metadata']['manuscriptCount']}
 - Facet types: {len(search_index['facets'])}
 - Cloud storage path: gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}
@@ -932,7 +1065,7 @@ Index generation complete:
             "documents": search_index['metadata']['manuscriptCount'],
             "cloudPath": f"gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}",
             "cloudFileSize": upload_result['size'],
-            "localPath": LOCAL_OUTPUT_PATH if SAVE_LOCAL_COPY else None,
+            "localPath": args.output if args.output else (LOCAL_OUTPUT_PATH if SAVE_LOCAL_COPY else None),
             "localFileSize": local_file_size
         }
     
@@ -959,6 +1092,11 @@ def parse_args():
         type=str,
         help="Local output path for the index (default: ./public/search-index.json)"
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force regeneration of the entire index (default: False, only add new manuscripts)"
+    )
     
     return parser.parse_args()
 
@@ -977,10 +1115,17 @@ if __name__ == "__main__":
     if args.output:
         LOCAL_OUTPUT_PATH = args.output
     
+    # Log mode of operation
+    if args.force:
+        logger.info("Running in FORCE mode - will regenerate entire index")
+    else:
+        logger.info("Running in UPDATE mode - will only add new manuscripts")
+    
     # Run the index generator
     try:
-        result = generate_search_index()
-        logger.info(f"Index generation job completed successfully. Generated index with {result['documents']} manuscripts.")
+        result = generate_search_index(args)
+        action_verb = "regenerated" if args.force else "updated"
+        logger.info(f"Index generation job completed successfully. {action_verb.capitalize()} index with {result['documents']} manuscripts.")
         exit(0)
     except Exception as e:
         logger.error(f"Index generation job failed: {str(e)}")

@@ -556,7 +556,7 @@
                   {/if}
                 </th>
                 <th>Languages</th>
-                <th class="sortable-header" on:click={() => handleSort('date')}>
+                <th class="sortable-header date-column" on:click={() => handleSort('date')}>
                   Date 
                   {#if sortField === 'date'}
                     <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
@@ -945,6 +945,7 @@
     position: relative;
     user-select: none;
     transition: background-color 0.2s ease;
+    white-space: nowrap; /* Prevent header text from wrapping */
   }
   
   .sortable-header:hover {
@@ -956,6 +957,8 @@
     width: 1rem;
     font-weight: bold;
     color: #4a5568;
+    position: relative;
+    margin-left: 2px;
   }
   
   .manuscripts-table td {
@@ -983,6 +986,12 @@
   .thumbnail-cell {
     width: 80px;
     min-width: 80px;
+  }
+  
+  .date-column {
+    width: 100px;
+    min-width: 100px;
+    white-space: nowrap; /* Prevent Date and arrow from wrapping */
   }
   
   .pages-column {

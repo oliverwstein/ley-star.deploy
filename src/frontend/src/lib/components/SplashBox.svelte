@@ -8,10 +8,6 @@
     <div class="text-content">
       <p class="mb-6">
         Leystar is your portal to centuries of medieval and renaissance manuscripts, transforming static digital images into a living, searchable archive that reveals hidden connections across time.
-        Unlike traditional manuscript databases, Leystar lets you search not just titles and metadata, but the actual content of pages—from main text to marginal notes—making it possible to trace ideas, phrases, and annotations across manuscripts spanning different centuries and collections.
-        With multilingual search capabilities, you can search in modern English to find relevant passages even in Church Latin, Old French, or Middle English manuscripts.
-
-        Or rather, you'll be able to once I add that functionality back in. Right now, you can search the metadata and see transcripts of transcribed texts.
       </p>
     </div>
     <div class="button-container">

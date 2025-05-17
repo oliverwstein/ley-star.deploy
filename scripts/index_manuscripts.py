@@ -347,6 +347,44 @@ LANGUAGE_METADATA = {
 }
 
 # --------------------------------
+# TRANSCRIPTION STATUS FUNCTION
+# --------------------------------
+
+def get_transcription_status(bucket, manuscript_id: str, page_count: int) -> str:
+    """
+    Determines the transcription status of a manuscript based on the presence of
+    raw_transcript.txt files for its pages.
+
+    Args:
+        bucket: GCS bucket object.
+        manuscript_id: The ID of the manuscript.
+        page_count: The total number of pages in the manuscript.
+
+    Returns:
+        A string indicating the transcription status:
+        "Fully Transcribed", "Partially Transcribed", or "Not Transcribed".
+    """
+    if not isinstance(page_count, int) or page_count <= 0:
+        logger.warning(f"Manuscript {manuscript_id} has invalid page_count: {page_count}. Defaulting to 'Not Transcribed'.")
+        return "Not Transcribed"
+
+    transcribed_page_count = 0
+    for page_num in range(1, page_count + 1):
+        page_num_padded = str(page_num).zfill(4)
+        transcript_path = f"catalogue/{manuscript_id}/pages/{page_num_padded}/raw_transcript.txt"
+        
+        blob = bucket.blob(transcript_path)
+        if blob.exists():
+            transcribed_page_count += 1
+    
+    if transcribed_page_count == 0:
+        return "Not Transcribed"
+    elif transcribed_page_count == page_count:
+        return "Fully Transcribed"
+    else:
+        return "Partially Transcribed"
+
+# --------------------------------
 # FACET EXTRACTION
 # --------------------------------
 
@@ -355,7 +393,7 @@ def extract_facets(documents: List[Dict[str, Any]]) -> Dict[str, Dict[str, List[
     Extract facets from a set of documents
     
     Args:
-        documents: List of manuscript documents
+        documents: List of manuscript documents (full metadata items)
         
     Returns:
         Facet data mapping facet types to values and document IDs
@@ -364,51 +402,45 @@ def extract_facets(documents: List[Dict[str, Any]]) -> Dict[str, Dict[str, List[
         'languages': {},
         'material_keywords': {},
         'script_keywords': {},
-        'repository': {}
+        'repository': {},
+        'transcription_status': {} # New facet
     }
     
     for doc in documents:
         try:
             doc_id = doc['id']
             
-            # Languages facet (array) - with standardization
+            # Languages facet
             languages = doc.get('languages', [])
             if languages:
                 if not isinstance(languages, list):
                     languages = [str(languages)]
-                
-                # Standardize language codes
                 standardized_langs = standardize_languages(languages)
-                
                 for lang in standardized_langs:
-                    if lang not in facets['languages']:
-                        facets['languages'][lang] = []
-                    facets['languages'][lang].append(doc_id)
+                    facets['languages'].setdefault(lang, []).append(doc_id)
             
             # Material keywords facet
             material_keywords = doc.get('material_keywords', [])
             if isinstance(material_keywords, list):
                 for keyword in material_keywords:
-                    if keyword not in facets['material_keywords']:
-                        facets['material_keywords'][keyword] = []
-                    facets['material_keywords'][keyword].append(doc_id)
+                    facets['material_keywords'].setdefault(keyword, []).append(doc_id)
             
             # Script keywords facet
             script_keywords = doc.get('script_keywords', [])
             if isinstance(script_keywords, list):
                 for keyword in script_keywords:
-                    if keyword not in facets['script_keywords']:
-                        facets['script_keywords'][keyword] = []
-                    facets['script_keywords'][keyword].append(doc_id)
+                    facets['script_keywords'].setdefault(keyword, []).append(doc_id)
             
             # Repository facet
             repository = str(doc.get('repository', 'Unknown'))
-            if repository not in facets['repository']:
-                facets['repository'][repository] = []
-            facets['repository'][repository].append(doc_id)
+            facets['repository'].setdefault(repository, []).append(doc_id)
+
+            # Transcription status facet
+            transcription_status = doc.get('transcription_status', 'Not Transcribed') # Default if somehow missing
+            facets['transcription_status'].setdefault(transcription_status, []).append(doc_id)
             
         except Exception as e:
-            logger.warning(f"Error processing facets for document: {e}")
+            logger.warning(f"Error processing facets for document {doc.get('id', 'UNKNOWN')}: {e}")
             continue
     
     return facets
@@ -440,7 +472,7 @@ def generate_pca_coordinates(documents: List[Dict[str, Any]]) -> Dict[str, Dict[
             doc.get("contents_summary", ""),
             " ".join(str(theme) for theme in doc.get("themes", [])) if isinstance(doc.get("themes", []), list) else "",
             str(doc.get("historical_context", "")),
-            str(doc.get("language", ""))
+            str(doc.get("language", "")) # Assuming 'language' might be a single string here, not the list
         ]))
         
         if text.strip():
@@ -450,8 +482,9 @@ def generate_pca_coordinates(documents: List[Dict[str, Any]]) -> Dict[str, Dict[
     if len(corpus) < 3:
         logger.warning("Not enough documents with text for PCA. Using random coordinates.")
         result = {}
-        for doc in documents:
-            result[doc["id"]] = [
+        for doc_idx in range(len(documents)): # Iterate over original documents list
+            doc_id = documents[doc_idx]["id"]
+            result[doc_id] = [
                 np.random.uniform(-1, 1),
                 np.random.uniform(-1, 1),
                 np.random.uniform(-1, 1)
@@ -464,7 +497,20 @@ def generate_pca_coordinates(documents: List[Dict[str, Any]]) -> Dict[str, Dict[
         features = vectorizer.fit_transform(corpus)
         
         # Apply PCA to reduce to 3 dimensions
-        pca = PCA(n_components=min(3, len(corpus), features.shape[1]))
+        pca_n_components = min(3, features.shape[0], features.shape[1])
+        if pca_n_components == 0: # Handle edge case where no features are generated
+             logger.warning("PCA n_components is 0. Using random coordinates.")
+             result = {}
+             for doc_idx in range(len(documents)):
+                 doc_id = documents[doc_idx]["id"]
+                 result[doc_id] = [
+                    np.random.uniform(-1, 1),
+                    np.random.uniform(-1, 1),
+                    np.random.uniform(-1, 1)
+                 ]
+             return result
+
+        pca = PCA(n_components=pca_n_components)
         coords_3d = pca.fit_transform(features.toarray())
         
         # Normalize coordinates to range [-1, 1]
@@ -477,26 +523,29 @@ def generate_pca_coordinates(documents: List[Dict[str, Any]]) -> Dict[str, Dict[
             if coords_range[i] == 0:
                 coords_range[i] = 1.0
                 
-        normalized = 2 * (coords_3d - coords_min) / coords_range - 1
+        normalized_coords = 2 * (coords_3d - coords_min) / coords_range - 1
         
         # Add coordinates to documents
         result = {}
-        for i, doc_idx in enumerate(valid_indices):
-            doc_id = documents[doc_idx]["id"]
-            result[doc_id] = [
-                float(normalized[i, 0]),
-                float(normalized[i, 1]) if normalized.shape[1] > 1 else 0.0,
-                float(normalized[i, 2]) if normalized.shape[1] > 2 else 0.0
-            ]
+        for i, doc_idx_in_corpus in enumerate(valid_indices):
+            doc_id = documents[doc_idx_in_corpus]["id"]
+            # Ensure we handle cases where PCA might return fewer than 3 components
+            x_coord = float(normalized_coords[i, 0]) if normalized_coords.shape[1] > 0 else 0.0
+            y_coord = float(normalized_coords[i, 1]) if normalized_coords.shape[1] > 1 else 0.0
+            z_coord = float(normalized_coords[i, 2]) if normalized_coords.shape[1] > 2 else 0.0
+            result[doc_id] = [x_coord, y_coord, z_coord]
         
-        # Add random coordinates for documents without text
-        for doc in documents:
-            if doc["id"] not in result:
-                result[doc["id"]] = [
-                    np.random.uniform(-1, 1),
-                    np.random.uniform(-1, 1),
-                    np.random.uniform(-1, 1)
-                ]
+        # Add random coordinates for documents that were not in the corpus (e.g., no text)
+        all_doc_ids = {doc["id"] for doc in documents}
+        corpus_doc_ids = {documents[idx]["id"] for idx in valid_indices}
+        docs_without_text_ids = all_doc_ids - corpus_doc_ids
+
+        for doc_id in docs_without_text_ids:
+            result[doc_id] = [
+                np.random.uniform(-1, 1),
+                np.random.uniform(-1, 1),
+                np.random.uniform(-1, 1)
+            ]
         
         logger.info(f"Generated PCA coordinates for {len(result)} manuscripts")
         return result
@@ -505,8 +554,9 @@ def generate_pca_coordinates(documents: List[Dict[str, Any]]) -> Dict[str, Dict[
         logger.error(f"Error generating PCA coordinates: {e}")
         # Fallback to random coordinates
         result = {}
-        for doc in documents:
-            result[doc["id"]] = {
+        for doc_idx in range(len(documents)): # Iterate over original documents list
+            doc_id = documents[doc_idx]["id"]
+            result[doc_id] = {
                 "x": np.random.uniform(-1, 1),
                 "y": np.random.uniform(-1, 1),
                 "z": np.random.uniform(-1, 1)
@@ -517,32 +567,55 @@ def generate_pca_coordinates(documents: List[Dict[str, Any]]) -> Dict[str, Dict[
 # PAGE COUNT FUNCTION
 # --------------------------------
 
-def get_page_count(bucket, manuscript_id: str) -> int:
+def get_page_count(bucket, manuscript_id: str, metadata: Dict[str, Any]) -> int:
     """
-    Get the number of pages for a manuscript by counting page directories.
+    Get the number of pages for a manuscript.
+    Prioritizes 'page_count' from metadata if available and valid.
+    Otherwise, counts page directories in GCS.
     
     Args:
         bucket: GCS bucket object
         manuscript_id: Manuscript ID
+        metadata: The standard_metadata.json content for the manuscript
         
     Returns:
         Number of pages
     """
+    # Try to get page_count from metadata first
+    if metadata and 'page_count' in metadata:
+        try:
+            page_count_meta = int(metadata['page_count'])
+            if page_count_meta >= 0: # Allow 0 for manuscripts with no pages documented yet
+                # logger.debug(f"Using page_count {page_count_meta} from metadata for {manuscript_id}")
+                return page_count_meta
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid page_count '{metadata['page_count']}' in metadata for {manuscript_id}. Falling back to GCS scan.")
+
+    # Fallback: Count page directories in GCS
+    logger.debug(f"Falling back to GCS scan for page_count for {manuscript_id}")
     page_prefix = f"catalogue/{manuscript_id}/pages/"
     
     # List all blobs with the pages prefix
-    blobs = list(bucket.list_blobs(prefix=page_prefix))
+    blobs = list(bucket.list_blobs(prefix=page_prefix, delimiter='/')) # Use delimiter to list "directories"
     
-    # Extract unique page directory names
+    # The "prefixes" returned by list_blobs with a delimiter are the subdirectories.
+    # We need to filter these to ensure they are numeric page directories.
     page_dirs = set()
-    for blob in blobs:
+    # GCS returns subdirectories in blob.name if delimiter is used,
+    # and they end with the delimiter.
+    # Or, we can iterate all blobs and extract page numbers.
+    
+    all_page_blobs = list(bucket.list_blobs(prefix=page_prefix))
+    for blob in all_page_blobs:
         path_after_prefix = blob.name[len(page_prefix):]
         if '/' in path_after_prefix:
-            page_dir = path_after_prefix.split('/')[0]
-            if page_dir.isdigit():
-                page_dirs.add(page_dir)
+            page_dir_candidate = path_after_prefix.split('/')[0]
+            if page_dir_candidate.isdigit(): # Ensure it's a numeric page folder
+                page_dirs.add(page_dir_candidate)
     
-    return len(page_dirs)
+    actual_page_count = len(page_dirs)
+    # logger.debug(f"Counted {actual_page_count} page directories in GCS for {manuscript_id}")
+    return actual_page_count
 
 # --------------------------------
 # DOCUMENT PROCESSING
@@ -558,7 +631,7 @@ def process_manuscript_metadata(
     
     Args:
         id: Manuscript ID
-        metadata: Manuscript metadata
+        metadata: Manuscript metadata (from standard_metadata.json)
         bucket: GCS bucket object
         
     Returns:
@@ -585,31 +658,32 @@ def process_manuscript_metadata(
     if date_range and isinstance(date_range, list) and len(date_range) > 0:
         try:
             start_year = int(date_range[0])
-            end_year = int(date_range[1]) if len(date_range) > 1 else start_year
+            end_year = int(date_range[1]) if len(date_range) > 1 and date_range[1] is not None else start_year
             
-            # Add specific date information
             date_info = {
                 "start_year": start_year,
                 "end_year": end_year,
-                "date_range_text": f"{start_year}-{end_year}"
+                "date_range_text": f"{start_year}" if start_year == end_year else f"{start_year}-{end_year}"
             }
-        except (IndexError, TypeError, ValueError):
-            pass
+        except (IndexError, TypeError, ValueError) as e:
+            logger.warning(f"Error processing date_range for {id}: {date_range}, Error: {e}")
+            pass # Keep date_info empty
     
     # Handle coordinates safely
-    coordinates = {}
-    if metadata.get('coordinates') and isinstance(metadata['coordinates'], list) and len(metadata['coordinates']) >= 2:
+    coordinates_data = {} # Renamed to avoid conflict with imported coordinates module if any
+    raw_coords = metadata.get('coordinates')
+    if raw_coords and isinstance(raw_coords, list) and len(raw_coords) >= 2:
         try:
-            lat = float(metadata['coordinates'][0])
-            lon = float(metadata['coordinates'][1])
+            lat = float(raw_coords[0])
+            lon = float(raw_coords[1])
             
-            # Add coordinates if they appear valid
             if -90 <= lat <= 90 and -180 <= lon <= 180:
-                coordinates = {
+                coordinates_data = {
                     "latitude": lat,
                     "longitude": lon
                 }
-        except (IndexError, TypeError, ValueError):
+        except (IndexError, TypeError, ValueError) as e:
+            logger.warning(f"Error processing coordinates for {id}: {raw_coords}, Error: {e}")
             pass
     
     # Extract physical description safely
@@ -618,11 +692,7 @@ def process_manuscript_metadata(
         phys_desc = {}
     
     # Extract script type safely
-    script_type = "unknown"
-    if isinstance(phys_desc, dict):
-        script_type = ensure_str(phys_desc.get("script_type"), "unknown")
-    
-    # Extract script keywords
+    script_type = ensure_str(phys_desc.get("script_type"), "unknown")
     script_keywords = extract_script_keywords(script_type)
     
     # Extract decoration information safely
@@ -634,36 +704,29 @@ def process_manuscript_metadata(
         artistic_style = ensure_str(decoration.get('artistic_style', ''))
     
     # Get material type safely
-    material_type = "unknown"
-    if isinstance(phys_desc, dict):
-        material_type = ensure_str(phys_desc.get("material"), "unknown")
-    
-    # Extract material keywords
+    material_type = ensure_str(phys_desc.get("material"), "unknown")
     material_keywords = extract_material_keywords(material_type)
     
-    # Also check for additional material info in binding and artwork
-    if isinstance(phys_desc, dict):
-        # Check binding description
-        binding_desc = ensure_str(phys_desc.get("binding"), "")
-        if binding_desc:
-            material_keywords.extend(extract_material_keywords(binding_desc))
-        
-        # Check artwork description
-        artwork_desc = ensure_str(phys_desc.get("artwork"), "")
-        if artwork_desc:
-            material_keywords.extend(extract_material_keywords(artwork_desc))
+    binding_desc = ensure_str(phys_desc.get("binding"), "")
+    if binding_desc:
+        material_keywords.extend(extract_material_keywords(binding_desc))
     
-    # Remove duplicates while preserving order
-    material_keywords = list(dict.fromkeys(material_keywords))
+    artwork_desc = ensure_str(phys_desc.get("artwork"), "") # Assuming 'artwork' might exist
+    if artwork_desc:
+        material_keywords.extend(extract_material_keywords(artwork_desc))
     
-    # Get page count
-    page_count = get_page_count(bucket, id)
+    material_keywords = list(dict.fromkeys(material_keywords)) # Remove duplicates
+    
+    # Get page count (prioritizing metadata, then GCS scan)
+    page_count = get_page_count(bucket, id, metadata)
+    
+    # Get transcription status
+    transcription_status = get_transcription_status(bucket, id, page_count)
     
     # Standardize languages
     raw_languages = ensure_list(metadata.get("languages"), ["Unknown"])
     standardized_languages = standardize_languages(raw_languages)
     
-    # Create processed document with minimal fields for search results display
     processed_doc = {
         "id": id,
         "title": ensure_str(metadata.get("title"), "Untitled Manuscript"),
@@ -672,26 +735,28 @@ def process_manuscript_metadata(
         "authors": ensure_list(metadata.get("authors"), ["Unknown"]),
         "origin_location": ensure_str(metadata.get("origin_location"), "Unknown"),
         "languages": standardized_languages,
-        "material_keywords": material_keywords,  # Add extracted keywords
-        "script_keywords": script_keywords,  # Add extracted script keywords
+        "material_keywords": material_keywords,
+        "script_keywords": script_keywords,
         "page_count": page_count,
+        "transcription_status": transcription_status, # Added field
         "brief": (
-            f"{ensure_str(metadata.get('contents_summary'))}" 
+            ensure_str(metadata.get('contents_summary')) 
             if metadata.get('contents_summary') 
             else "No description available"
         ),
-        **date_info,  # Add date range information
-        **coordinates  # Add coordinates if available
+        **date_info,
+        **coordinates_data # Use the renamed variable
     }
     
-    # For internal search use - not included in output document
+    # For internal search use - not included in output document, but used for facets/PCA
     full_metadata = {
-        **processed_doc,
+        **processed_doc, # Start with all fields from processed_doc
         "alternative_titles": ensure_list(metadata.get("alternative_titles"), []),
-        "provenance": ensure_str(metadata.get("provenance"), ""),
-        "contents_summary": ensure_str(metadata.get("contents_summary"), ""),
+        "provenance": ensure_str(metadata.get("provenance"), ""), # Ensure provenance is string for TF-IDF
+        "contents_summary": ensure_str(metadata.get("contents_summary"), ""), # Already in brief, but good for PCA
         "historical_context": ensure_str(metadata.get("historical_context"), ""),
-        "physical_description": phys_desc,
+        "physical_description": phys_desc, # Keep as dict for potential future use
+        "themes": ensure_list(metadata.get("themes"), []), # For PCA
         "illuminations_description": illuminations_desc,
         "artistic_style": artistic_style,
         "scribes": ensure_list(metadata.get("scribes"), [])
@@ -706,47 +771,46 @@ def process_manuscript_metadata(
 # INDEX BUILDING FUNCTION
 # --------------------------------
 
-def build_search_index(processed_documents: List[Dict[str, Any]]) -> Dict[str, Any]:
+def build_search_index(processed_data_items: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Build the complete search index
+    Build the complete search index.
     
     Args:
-        processed_documents: List of processed manuscript data
+        processed_data_items: List of dictionaries, each containing 'document' and 'fullMetadata'.
         
     Returns:
-        Complete search index structure
+        Complete search index structure.
     """
-    logger.info(f"Building search index for {len(processed_documents)} manuscripts...")
+    logger.info(f"Building search index for {len(processed_data_items)} manuscripts...")
     
-    # Extract document data for search results
-    documents = [item["document"] for item in processed_documents]
+    # Extract document data for search results (the slimmed-down version)
+    documents_for_output = [item["document"] for item in processed_data_items]
     
-    # Extract full metadata for PCA and facets
-    full_metadata_items = [item["fullMetadata"] for item in processed_documents]
+    # Extract full metadata for PCA and facets (this contains all fields, including transcription_status)
+    full_metadata_for_processing = [item["fullMetadata"] for item in processed_data_items]
     
-    # Generate PCA coordinates
-    pca_coords = generate_pca_coordinates(full_metadata_items)
+    # Generate PCA coordinates using full metadata
+    pca_coords = generate_pca_coordinates(full_metadata_for_processing)
     
-    # Add PCA coordinates to documents
-    for doc in documents:
-        doc_id = doc["id"]
+    # Add PCA coordinates to the output documents
+    for doc_out in documents_for_output:
+        doc_id = doc_out["id"]
         if doc_id in pca_coords:
-            doc["pca_coords"] = pca_coords[doc_id]
+            doc_out["pca_coords"] = pca_coords[doc_id]
     
-    # Extract facets
-    facets = extract_facets(full_metadata_items)
-    logger.info("Extracted facets for filtering")
+    # Extract facets using full metadata
+    facets = extract_facets(full_metadata_for_processing)
+    logger.info(f"Extracted facets for filtering: {list(facets.keys())}")
     
-    # Construct the final index
     from datetime import datetime
     return {
         "metadata": {
-            "version": 1,
-            "manuscriptCount": len(documents),
+            "version": 1.1, # Incremented version for new status field
+            "manuscriptCount": len(documents_for_output),
             "generatedDate": datetime.now().isoformat(),
             "language_metadata": LANGUAGE_METADATA
         },
-        "documents": documents,
+        "documents": documents_for_output,
         "facets": facets
     }
 
@@ -767,30 +831,29 @@ def load_existing_index(bucket) -> Dict[str, Any]:
     logger.info(f"Checking for existing index at: gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}")
     
     try:
-        # Check if the index file exists
         blob = bucket.blob(CLOUD_OUTPUT_PATH)
         if not blob.exists():
             logger.info("No existing index found")
             return None
         
-        # Download to a temporary file
-        with tempfile.NamedTemporaryFile(suffix=".json") as temp_file:
-            blob.download_to_filename(temp_file.name)
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="r", delete=False) as temp_file:
+            temp_file_path = temp_file.name # Store path for reading after download
+        
+        blob.download_to_filename(temp_file_path)
             
-            # Read and parse
-            with open(temp_file.name, 'r') as f:
-                index_data = json.load(f)
+        with open(temp_file_path, 'r', encoding='utf-8') as f:
+            index_data = json.load(f)
+        
+        os.unlink(temp_file_path) # Clean up temp file
                 
-            # Validate the index structure
-            if not isinstance(index_data, dict) or 'documents' not in index_data:
-                logger.warning("Existing index has invalid structure")
-                return None
+        if not isinstance(index_data, dict) or 'documents' not in index_data:
+            logger.warning("Existing index has invalid structure")
+            return None
                 
-            # Get manuscript count
-            manuscript_count = len(index_data.get('documents', []))
-            logger.info(f"Loaded existing index with {manuscript_count} manuscripts")
+        manuscript_count = len(index_data.get('documents', []))
+        logger.info(f"Loaded existing index with {manuscript_count} manuscripts. Version: {index_data.get('metadata', {}).get('version', 'N/A')}")
             
-            return index_data
+        return index_data
                 
     except Exception as e:
         logger.warning(f"Error loading existing index: {str(e)}")
@@ -817,27 +880,20 @@ def get_indexed_manuscript_ids(index_data: Dict[str, Any]) -> set:
 
 def get_metadata_files_from_gcs(bucket):
     """Get list of metadata files from Google Cloud Storage"""
-    # Path to manuscripts in the bucket
     catalogue_path = 'catalogue/'
-    
-    # List all blobs with the catalogue prefix
     all_blobs = list(bucket.list_blobs(prefix=catalogue_path))
     
-    # Extract unique manuscript IDs from paths
     manuscript_ids = set()
     for blob in all_blobs:
         parts = blob.name.split('/')
-        if len(parts) > 2:  # catalogue/manuscript_id/...
+        if len(parts) > 2 and parts[0] == 'catalogue' and parts[1]: 
             manuscript_ids.add(parts[1])
     
-    logger.info(f"Found {len(manuscript_ids)} manuscript directories")
+    logger.info(f"Found {len(manuscript_ids)} potential manuscript directories")
     
-    # Look specifically for metadata files
     metadata_files = []
-    for manuscript_id in manuscript_ids:
+    for manuscript_id in tqdm(list(manuscript_ids), desc="Checking metadata files"):
         metadata_path = f"{catalogue_path}{manuscript_id}/standard_metadata.json"
-        
-        # Check if this specific file exists
         metadata_blob = bucket.blob(metadata_path)
         if metadata_blob.exists():
             metadata_files.append({
@@ -864,25 +920,20 @@ def upload_search_index(bucket, search_index: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"Uploading search index to gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}...")
     
     try:
-        # Create blob and upload
         blob = bucket.blob(CLOUD_OUTPUT_PATH)
-        
-        # Convert to JSON and upload
-        index_content = json.dumps(search_index)
+        index_content = json.dumps(search_index, indent=2) # Add indent for readability if downloaded
         blob.upload_from_string(
             index_content,
             content_type='application/json',
-            timeout=300  # 5 minute timeout for large files
+            timeout=300
         )
         
-        # Set cache control
-        blob.cache_control = 'public, max-age=3600'  # 1 hour cache
+        blob.cache_control = 'public, max-age=3600'
         blob.patch()
         
         logger.info(f"Successfully uploaded search index to gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}")
         
-        # Get file size
-        size_bytes = blob.size
+        size_bytes = len(index_content.encode('utf-8')) # More accurate size after dump
         
         return {
             "success": True,
@@ -898,204 +949,168 @@ def upload_search_index(bucket, search_index: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------
 
 def generate_search_index(args) -> Dict[str, Any]:
-    """
-    Main function to generate the search index
-    
-    Args:
-        args: Command line arguments
-        
-    Returns:
-        Result information
-    """
     logger.info("Starting client-side search index generation...")
     
-    try:
-        # Validate bucket name
-        if not GCS_BUCKET_NAME:
-            raise ValueError("GCS_BUCKET_NAME is not set. Please configure it in .env or environment variables.")
-        
-        # Initialize storage client
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(GCS_BUCKET_NAME)
-        
-        # Check if bucket exists
-        if not bucket.exists():
-            raise ValueError(f"Bucket '{GCS_BUCKET_NAME}' does not exist")
-        
-        logger.info(f"Using GCS bucket: {GCS_BUCKET_NAME}")
-        
-        # See if we're using the --force flag
-        force_reindex = args.force
-        
-        # Load existing index if it exists (unless forcing a full reindex)
-        existing_index = None if force_reindex else load_existing_index(bucket)
-        indexed_manuscript_ids = set()
-        
-        # If we have an existing index and aren't forcing a reindex, 
-        # get the IDs of already-indexed manuscripts
-        if existing_index is not None and not force_reindex:
-            indexed_manuscript_ids = get_indexed_manuscript_ids(existing_index)
-            logger.info(f"Found {len(indexed_manuscript_ids)} manuscripts in existing index")
-        
-        # Get metadata files from GCS
-        all_metadata_files = get_metadata_files_from_gcs(bucket)
-        
-        # If we're not forcing a reindex, filter out manuscripts that are already indexed
-        if not force_reindex and existing_index is not None:
-            metadata_files = [
-                file_info for file_info in all_metadata_files 
-                if file_info["manuscriptId"] not in indexed_manuscript_ids
-            ]
-            logger.info(f"Found {len(metadata_files)} new manuscripts to index (out of {len(all_metadata_files)} total)")
+    if not GCS_BUCKET_NAME:
+        raise ValueError("GCS_BUCKET_NAME is not set.")
+    
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(GCS_BUCKET_NAME)
+    if not bucket.exists():
+        raise ValueError(f"Bucket '{GCS_BUCKET_NAME}' does not exist")
+    
+    logger.info(f"Using GCS bucket: {GCS_BUCKET_NAME}")
+    
+    force_reindex = args.force
+    
+    existing_index = None
+    processed_documents_from_existing = [] # Store 'fullMetadata' items from existing index
+
+    if not force_reindex:
+        existing_index = load_existing_index(bucket)
+        if existing_index:
+            logger.info(f"Existing index loaded. {len(existing_index.get('documents', []))} documents.")
+            # Reconstruct fullMetadata items from the existing documents for merging
+            for doc_data in existing_index.get('documents', []):
+                # Assume the document in the index IS the fullMetadata for simplicity in merging.
+                # If it's not, this part would need adjustment or we only add new ones.
+                processed_documents_from_existing.append({"document": doc_data, "fullMetadata": doc_data})
         else:
-            # If forcing a reindex or no existing index, process all manuscripts
-            metadata_files = all_metadata_files
-            if force_reindex:
-                logger.info(f"Forcing reindex of all {len(metadata_files)} manuscripts")
-        
-        # If no new manuscripts and we have an existing index, just return it
-        if len(metadata_files) == 0 and existing_index is not None:
-            logger.info("No new manuscripts to index, keeping existing index")
-            
-            # Get the size of the existing index
-            blob = bucket.blob(CLOUD_OUTPUT_PATH)
-            existing_size = blob.size
-            
-            return {
+            logger.info("No valid existing index found or error loading it.")
+    
+    indexed_manuscript_ids = get_indexed_manuscript_ids(existing_index) if existing_index else set()
+
+    all_metadata_files_info = get_metadata_files_from_gcs(bucket)
+    
+    files_to_process_info = []
+    if force_reindex:
+        files_to_process_info = all_metadata_files_info
+        logger.info(f"Forcing reindex of all {len(files_to_process_info)} manuscripts.")
+        processed_documents_from_existing = [] # Discard existing if forcing reindex
+    else:
+        new_or_updated_files_count = 0
+        for file_info in all_metadata_files_info:
+            if file_info["manuscriptId"] not in indexed_manuscript_ids:
+                files_to_process_info.append(file_info)
+                new_or_updated_files_count +=1
+        logger.info(f"Found {new_or_updated_files_count} new or updated manuscripts to process.")
+        if not files_to_process_info and existing_index:
+             logger.info("No new manuscripts to index. Using existing index.")
+             # No need to re-upload if no changes
+             return {
                 "success": True,
                 "documents": len(existing_index.get('documents', [])),
                 "cloudPath": f"gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}",
-                "cloudFileSize": existing_size,
+                "cloudFileSize": bucket.blob(CLOUD_OUTPUT_PATH).size if bucket.blob(CLOUD_OUTPUT_PATH).exists() else 0,
                 "localPath": None,
                 "localFileSize": 0,
-                "message": "No new manuscripts found, kept existing index"
+                "message": "No new manuscripts found, existing index is current."
             }
+
+    newly_processed_documents_data = [] # Store as {"document": ..., "fullMetadata": ...}
+    error_count = 0
+    
+    for file_info in tqdm(files_to_process_info, desc="Processing manuscript metadata"):
+        file_path = file_info["name"]
+        manuscript_id = file_info["manuscriptId"]
         
-        # Process manuscripts (either all of them or just the new ones)
-        processed_documents = []
-        error_count = 0
+        try:
+            blob = bucket.blob(file_path)
+            with tempfile.NamedTemporaryFile(suffix=".json", mode="r", delete=False) as temp_file:
+                temp_file_path = temp_file.name
+            
+            blob.download_to_filename(temp_file_path)
+            
+            with open(temp_file_path, 'r', encoding='utf-8') as f:
+                manuscript_data = json.load(f)
+            os.unlink(temp_file_path)
+            
+            processed_data_item = process_manuscript_metadata(manuscript_id, manuscript_data, bucket)
+            newly_processed_documents_data.append(processed_data_item)
         
-        # Use tqdm for progress bar
-        for file_info in tqdm(metadata_files, desc="Processing manuscripts"):
-            file_path = file_info["name"]
-            manuscript_id = file_info["manuscriptId"]
-            
-            try:
-                # Get blob object
-                blob = bucket.blob(file_path)
-                
-                # Create temp file for downloading
-                with tempfile.NamedTemporaryFile(suffix=".json") as temp_file:
-                    # Download file
-                    blob.download_to_filename(temp_file.name)
-                    
-                    # Read and parse metadata
-                    with open(temp_file.name, 'r') as f:
-                        manuscript_data = json.load(f)
-                
-                # Process metadata
-                processed_doc = process_manuscript_metadata(
-                    manuscript_id,
-                    manuscript_data,
-                    bucket
-                )
-                
-                processed_documents.append(processed_doc)
-            
-            except Exception as e:
-                logger.error(f"Error processing {file_path}: {str(e)}")
-                error_count += 1
+        except Exception as e:
+            logger.error(f"Error processing {file_path}: {str(e)}", exc_info=True)
+            error_count += 1
+
+    # Combine existing (if not force_reindex) and newly processed documents
+    # We need to ensure no duplicates if a manuscript was reprocessed.
+    # `processed_documents_from_existing` contains fullMetadata dicts.
+    # `newly_processed_documents_data` contains `{"document":slim, "fullMetadata":full}` dicts.
+    
+    final_processed_items_map = {} # Use a map to handle updates/overwrites
+    
+    # Add existing items first
+    for item_data in processed_documents_from_existing:
+        # item_data["fullMetadata"] is used for consistency
+        final_processed_items_map[item_data["fullMetadata"]["id"]] = item_data
         
-        # If we're updating an existing index and have new documents, merge them
-        if existing_index is not None and not force_reindex and processed_documents:
-            logger.info(f"Merging {len(processed_documents)} new documents with existing index")
-            
-            # Extract existing documents
-            existing_docs = existing_index.get('documents', [])
-            existing_full_metadata = []
-            
-            # We need to create full metadata entries for the existing docs
-            # This is a simplified version since we don't have all the original data
-            for doc in existing_docs:
-                existing_full_metadata.append({
-                    "document": doc,
-                    "fullMetadata": {**doc}  # Copy the document as fullMetadata
-                })
-            
-            # Combine the existing and new documents
-            all_documents = existing_full_metadata + processed_documents
-            
-            # Rebuild the index with all documents
-            search_index = build_search_index(all_documents)
-        else:
-            # Build a fresh index with just the processed documents
-            search_index = build_search_index(processed_documents)
+    # Add/overwrite with newly processed items
+    for item_data in newly_processed_documents_data:
+        final_processed_items_map[item_data["fullMetadata"]["id"]] = item_data
         
-        # Upload to Google Cloud Storage
-        upload_result = upload_search_index(bucket, search_index)
-        
-        # Optionally save locally
-        local_file_size = 0
-        if SAVE_LOCAL_COPY or args.save_local:
-            # Ensure output directory exists
-            output_path = args.output or LOCAL_OUTPUT_PATH
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            
-            # Write index to file
-            with open(output_path, 'w') as f:
-                json.dump(search_index, f)
-                
-            local_file_size = os.path.getsize(output_path)
-            logger.info(f"Also saved index locally to {output_path}")
-        
-        # Print size info
-        cloud_size_mb = upload_result['size'] / (1024 * 1024)
-        
-        action_msg = "regenerated" if force_reindex else "updated" if existing_index else "generated"
-        logger.info(f"""
+    final_processed_list = list(final_processed_items_map.values())
+
+    if not final_processed_list and not existing_index: # No data at all
+        logger.warning("No manuscripts processed and no existing index. Index will be empty.")
+
+    search_index = build_search_index(final_processed_list)
+    
+    upload_result = upload_search_index(bucket, search_index)
+    
+    local_file_size = 0
+    local_output_actual_path = None
+    if SAVE_LOCAL_COPY or args.save_local:
+        local_output_actual_path = args.output or LOCAL_OUTPUT_PATH
+        os.makedirs(os.path.dirname(local_output_actual_path), exist_ok=True)
+        with open(local_output_actual_path, 'w', encoding='utf-8') as f:
+            json.dump(search_index, f, indent=2)
+        local_file_size = os.path.getsize(local_output_actual_path)
+        logger.info(f"Also saved index locally to {local_output_actual_path}")
+    
+    cloud_size_mb = upload_result['size'] / (1024 * 1024)
+    num_indexed_docs = search_index['metadata']['manuscriptCount']
+    
+    action_msg = "regenerated" if force_reindex else "updated" if (existing_index or newly_processed_documents_data) else "generated"
+    logger.info(f"""
 Index {action_msg} successfully:
-- Documents indexed: {search_index['metadata']['manuscriptCount']}
+- Documents in index: {num_indexed_docs} (Errors processing: {error_count})
 - Facet types: {len(search_index['facets'])}
 - Cloud storage path: gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}
 - File size: {cloud_size_mb:.2f} MB
-        """)
-        
-        return {
-            "success": True,
-            "documents": search_index['metadata']['manuscriptCount'],
-            "cloudPath": f"gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}",
-            "cloudFileSize": upload_result['size'],
-            "localPath": args.output if args.output else (LOCAL_OUTPUT_PATH if SAVE_LOCAL_COPY else None),
-            "localFileSize": local_file_size
-        }
+    """)
     
-    except Exception as e:
-        logger.error(f"Index generation failed: {str(e)}")
-        raise
+    return {
+        "success": True,
+        "documents": num_indexed_docs,
+        "cloudPath": f"gs://{GCS_BUCKET_NAME}/{CLOUD_OUTPUT_PATH}",
+        "cloudFileSize": upload_result['size'],
+        "localPath": local_output_actual_path,
+        "localFileSize": local_file_size
+    }
 
 # --------------------------------
 # COMMAND LINE INTERFACE
 # --------------------------------
 
 def parse_args():
-    """Parse command line arguments"""
     parser = argparse.ArgumentParser(
         description="Generate lightweight client-side search index for Ley-Star manuscripts"
     )
     parser.add_argument(
         "--save-local",
         action="store_true",
-        help="Save a local copy of the index (default: False)"
+        help="Save a local copy of the index (default: False, controlled by SAVE_LOCAL_COPY env var)"
     )
     parser.add_argument(
         "--output",
         type=str,
-        help="Local output path for the index (default: ./public/search-index.json)"
+        default=None, # Default will be handled by LOCAL_OUTPUT_PATH env var
+        help=f"Local output path for the index (default: {LOCAL_OUTPUT_PATH} or from INDEX_OUTPUT_PATH env var)"
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Force regeneration of the entire index (default: False, only add new manuscripts)"
+        help="Force regeneration of the entire index (default: False, only add new/updated manuscripts)"
     )
     
     return parser.parse_args()
@@ -1105,28 +1120,28 @@ def parse_args():
 # --------------------------------
 
 if __name__ == "__main__":
-    # Parse command line arguments
     args = parse_args()
     
-    # Override environment variables with command line arguments
+    # Override SAVE_LOCAL_COPY if --save-local is explicitly used
     if args.save_local:
         SAVE_LOCAL_COPY = True
     
+    # Set LOCAL_OUTPUT_PATH if --output is provided, otherwise it uses env var or default
     if args.output:
         LOCAL_OUTPUT_PATH = args.output
     
-    # Log mode of operation
     if args.force:
         logger.info("Running in FORCE mode - will regenerate entire index")
     else:
-        logger.info("Running in UPDATE mode - will only add new manuscripts")
+        logger.info("Running in INCREMENTAL UPDATE mode - will process new/changed manuscripts and merge with existing.")
     
-    # Run the index generator
     try:
         result = generate_search_index(args)
-        action_verb = "regenerated" if args.force else "updated"
-        logger.info(f"Index generation job completed successfully. {action_verb.capitalize()} index with {result['documents']} manuscripts.")
+        logger.info(f"Index generation job completed. Status: {'Success' if result['success'] else 'Failed'}. Indexed {result['documents']} manuscripts.")
         exit(0)
+    except ValueError as ve: # Catch specific configuration errors
+        logger.error(f"Configuration error: {str(ve)}")
+        exit(1)
     except Exception as e:
-        logger.error(f"Index generation job failed: {str(e)}")
+        logger.error(f"Index generation job failed with an unhandled exception: {str(e)}", exc_info=True)
         exit(1)
